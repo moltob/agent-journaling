@@ -1,0 +1,14 @@
+# Agentic journaling propagation run.
+# Machine-specific settings (WorkingDirectory, PATH, env) belong in a drop-in:
+#   systemctl --user edit agentic-journal.service
+# See README.md.
+[Unit]
+Description=Agentic journaling propagation run
+
+[Service]
+Type=oneshot
+# Set in the drop-in: the checkout of this repository.
+# WorkingDirectory=%h/work/agentic-journaling
+# /usr/bin/env resolves omp through the PATH set in the drop-in.
+ExecStart=/usr/bin/env omp -p "Run the /agentic-journaling skill: read .agents/skills/agentic-journaling/SKILL.md and follow it to run a propagation for every configured journal."
+TimeoutStartSec=30min

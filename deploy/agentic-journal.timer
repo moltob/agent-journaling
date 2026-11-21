@@ -1,0 +1,11 @@
+# Schedule for agentic-journal.service. Override OnCalendar in a drop-in:
+#   systemctl --user edit agentic-journal.timer
+[Unit]
+Description=Schedule agentic journaling runs
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

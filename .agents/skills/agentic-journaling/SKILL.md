@@ -1,0 +1,101 @@
+---
+name: agentic-journaling
+description: Run a propagation over Obsidian journals - find `#agent` task requests in daily notes, carry each out against a target defined in the journal's config note, and write status and result back. Use when asked to run, check or set up agentic journaling.
+---
+
+# Agentic journaling
+
+Scripts do the mechanics: configuration, discovery, scope, ids, status, feedback, compare-and-swap writes and logging. You do only what needs judgment: matching a request to a target and carrying out the target's instructions.
+
+The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <skill-dir>/scripts/aj.py <command>`. It prints log lines on stdout and mirrors them to journald itself; never re-log or summarize them elsewhere.
+
+## Hard rules
+
+- Never edit a request line, its checkbox, its block id or its feedback sub-items. Only `aj.py` writes those.
+- Every request in the `begin` result gets exactly one `report` call, success or error. Then call `end` for every run that `begin` left open.
+- Process requests one at a time, each in a fresh subagent, using your harness's subagent/task tool. Never run two at once.
+- When in doubt, report an error in one sentence. Never guess a target.
+- Never put secrets into any note. Use the env var or CLI login a target section names.
+
+## Propagation run
+
+1. Start:
+
+   ```sh
+   uv run <skill-dir>/scripts/aj.py begin            # all journals
+   uv run <skill-dir>/scripts/aj.py begin --journal main
+   ```
+
+   After the log lines comes `== begin result ==` and a JSON array, one entry per journal:
+
+   ```json
+   [{"journal": "main", "run": "r7k2", "ended": false,
+     "vault": "/home/me/Notes/Main", "config_note": "/home/me/Notes/Main/Journal/Agentic Journaling.md",
+     "targets": [{"name": "kb", "aliases": ["KB", "knowledge base", "wiki"]}],
+     "requests": [{"id": "agent-7f3a", "file": "Journal/2026-11-21.md", "line": 14,
+                   "instruction": "add this to the KB", "heading": "## Notes",
+                   "parent": null, "content": "- Obsidian Journal View ...\n    - Settings: ..."}]}]
+   ```
+
+   `begin` has already claimed every listed request (`[/]` plus block id) and already handled scope errors itself. An entry with `"ended": true` needs nothing more: it had no requests or failed to load (`error`).
+
+2. For each request of each journal whose `ended` is false, start one subagent with the prompt below, filled in. Wait for it to finish before starting the next.
+
+3. Turn the subagent's answer into one `report` call:
+
+   ```sh
+   # success
+   uv run <skill-dir>/scripts/aj.py report --journal main --run r7k2 --id agent-7f3a \
+     --target kb --change updated --link "KB/tools/obsidian-journal-view.md" \
+     --title "Obsidian Journal View" --summary "added the folder setting"
+   # error, including no or ambiguous target match and a subagent that failed or returned nothing usable
+   uv run <skill-dir>/scripts/aj.py report --journal main --run r7k2 --id agent-7f3a \
+     --target kb --error "the KB folder does not exist"
+   ```
+
+   Omit `--target` when no target matched. `--change` is `created` or `updated`; omit it when neither fits. If `report` exits non-zero, note it and continue with the next request.
+
+4. After all requests of a journal are reported:
+
+   ```sh
+   uv run <skill-dir>/scripts/aj.py end --run r7k2
+   ```
+
+5. Reply with one line per journal: run id, how many requests were done and how many failed.
+
+## Subagent prompt
+
+```text
+You carry out one agentic-journaling request. Work only on this request.
+
+Vault root: <vault>
+Config note: <config_note>
+Request id: <id> (block id ^<id> in <file>; link back to it as <file>#^<id>)
+Instruction: <instruction>
+Context heading: <heading>
+Context parent item: <parent>
+Content the request covers:
+<content>
+
+1. Read the "## Targets" section of the config note. Each "### <name>" section is a
+   target, running to the next ### or ## heading; its "Aliases:" line lists other names.
+2. Match the instruction against the target names and aliases. If no target or more than
+   one target matches, stop and answer ERROR naming why.
+3. Follow the matched target's section exactly. Paths in it are relative to the vault root.
+   Use only the credentials it names (env var or CLI login).
+4. Never edit the journal note's request line or the lines under it.
+
+Answer with exactly these lines and nothing after them:
+TARGET: <matched target name, or none>
+RESULT: OK or ERROR
+CHANGE: created, updated or none        (OK only)
+LINK: <vault-relative path or URL>       (OK only)
+TITLE: <link text>                       (OK only)
+SUMMARY: <one sentence on what was done> (OK only)
+ERROR: <one sentence on why it failed>   (ERROR only)
+```
+
+## Other commands
+
+- `aj.py check [--journal main]`: read-only. Validates the machine file and config notes, lists targets, shows whether the docs block would be re-rendered, previews each open request with its scope, and lists requests stuck at `[/]`.
+- `aj.py init --name main "<journal folder>"`: registers a journal in `~/.config/agentic-journal/config.yaml` and creates `Agentic Journaling.md` with an empty `## Targets` section in that folder.
