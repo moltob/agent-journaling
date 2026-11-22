@@ -461,7 +461,6 @@ class Scope:
     content: str = ""
     parent: str | None = None
     heading: str | None = None
-    error: str | None = None
 
 
 def compute_scope(lines: list[Line], r: int) -> Scope:
@@ -501,10 +500,7 @@ def compute_scope(lines: list[Line], r: int) -> Scope:
         if ln.kind == "heading":
             scope.heading = ln.raw.strip()
             break
-    if top is None:
-        scope.error = "the request has no items above it at the same list level"
-        return scope
-    body = [dedent(ln.raw, level) for ln in lines[top:r]]
+    body = [] if top is None else [dedent(ln.raw, level) for ln in lines[top:r]]
     while body and not body[-1].strip():
         body.pop()
     scope.content = "\n".join(body)
@@ -861,14 +857,6 @@ def cmd_begin(args: argparse.Namespace) -> int:
                 log("skipped", sweep=sweep, block=req.rid, file=rel, line=req.idx + 1, message=str(exc))
                 continue
             log("discover", sweep=sweep, run=run, block=block, file=rel, text=req.instruction)
-            if req.scope.error:
-                log("error", sweep=sweep, run=run, block=block, message=req.scope.error)
-                try:
-                    finalize(journal, req.path, block, ERROR, feedback_error(run, req.scope.error))
-                    log("state", sweep=sweep, run=run, block=block, status=STATUS_NAMES[ERROR])
-                except (AJError, OSError) as exc:
-                    log("error", sweep=sweep, run=run, block=block, message=f"could not write the scope error: {exc}")
-                continue
             claimed.append({
                 "run": run,
                 "block": block,
@@ -969,11 +957,8 @@ def cmd_check(args: argparse.Namespace) -> int:
                 print(f"      heading: {f.scope.heading}")
             if f.scope.parent:
                 print(f"      parent:  {f.scope.parent}")
-            if f.scope.error:
-                print(f"      SCOPE ERROR: {f.scope.error} (a run sets [!])")
-            else:
-                for c in f.scope.content.split("\n"):
-                    print(f"      | {c}")
+            for c in f.scope.content.split("\n") if f.scope.content else ["(nothing above the request)"]:
+                print(f"      | {c}")
         print(f"  stuck in progress [/] ({len(stuck)}):")
         for f in stuck:
             print(f"    {journal.rel(f.path)}:{f.idx + 1} {f.rid or '(no id)'} {f.instruction!r} -> set back to [ ] to retry")

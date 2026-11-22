@@ -37,7 +37,7 @@ The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <sk
                    "parent": null, "content": "- Obsidian Journal View ...\n    - Settings: ..."}]}]
    ```
 
-   `begin` has already claimed every listed request (`[/]` plus block id), given each a run id, and handled scope errors itself. An entry with `"ended": true` needs nothing more: it had no requests or failed to load (`error`).
+   `begin` has already claimed every listed request (`[/]` plus block id) and given each a run id. `content` is what the script collected above the request; it may be empty. An entry with `"ended": true` needs nothing more: it had no requests or failed to load (`error`).
 
 2. For each request of each journal whose `ended` is false, start one subagent with the prompt below, filled in. Wait for it to finish before starting the next.
 
@@ -69,16 +69,21 @@ Request in: <file>
 Instruction: <instruction>
 Context heading: <heading>
 Context parent item: <parent>
-Content the request covers:
+Content above the request (may be empty):
 <content>
 
 1. Read the "## Targets" section of the config note. Each "### <name>" section is a
    target, running to the next ### or ## heading; its "Aliases:" line lists other names.
 2. Match the instruction against the target names and aliases. If no target or more than
    one target matches, stop and answer ERROR naming why.
-3. Follow the matched target's section exactly. Paths in it are relative to the vault root.
+3. Decide whether the instruction refers to the content above ("this", "the notes above",
+   "the process described above") or stands alone. If it refers to it, work from that
+   content. If it stands alone, ignore the content and work from the instruction. If it
+   refers to content that is empty or does not fit, or it stands alone but does not say
+   enough to act on, stop and answer ERROR naming why.
+4. Follow the matched target's section exactly. Paths in it are relative to the vault root.
    Use only the credentials it names (env var or CLI login).
-4. Never edit the journal note's request line or the lines under it. Never write block ids
+5. Never edit the journal note's request line or the lines under it. Never write block ids
    or block references (^…, #^…) into what you create or update.
 
 Answer with exactly these lines and nothing after them:

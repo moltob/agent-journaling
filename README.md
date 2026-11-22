@@ -217,7 +217,14 @@ A request is a task item tagged `#agent`, written as the **last** item of the co
 - [ ] #agent add to the KB under the sync service concept
 ```
 
-The request covers the items above it at the same level, with their children. Collection stops at the first of: the start of the parent item, a heading, a plain paragraph, an empty line between items at the request's level (empty lines inside an item's children don't count), an earlier `#agent` request at the same level. The parent item and the nearest heading are passed along as context.
+The content collected for a request is the items above it at the same level, with their children. Collection stops at the first of: the start of the parent item, a heading, a plain paragraph, an empty line between items at the request's level (empty lines inside an item's children don't count), an earlier `#agent` request at the same level. The parent item and the nearest heading are passed along as context.
+
+The agent decides whether the instruction refers to that content ("add this to the KB", "the process described above") or stands alone. A stand-alone request ignores it, and the collected content may be empty:
+
+```markdown
+Some paragraph.
+- [ ] #agent create a KB concept on retry backoff strategies
+```
 
 Nested requests work the same way, inside a parent item:
 
@@ -233,14 +240,6 @@ Nested requests work the same way, inside a parent item:
 Here the first request covers the two items about the export bug; the second covers only "decided to drop the legacy importer", because collection stops at the earlier request. "Project Atlas" is context for both.
 
 Ignored: `#agent` in fenced code, in inline code, inside `%% … %%` comments, and anywhere in the config note.
-
-A request with no items above it at its level is an error:
-
-```markdown
-Some paragraph.
-- [ ] #agent add this to the KB
-    - Failed: the request has no items above it at the same list level. Run aj-run-m2q7.
-```
 
 ### Status
 
