@@ -467,14 +467,22 @@ class Scope:
 def compute_scope(lines: list[Line], r: int) -> Scope:
     level = lines[r].indent
     top: int | None = None
+    below = level  # indent of the nearest non-blank line below i
     i = r - 1
     while i >= 0:
         ln = lines[i]
-        if ln.kind in ("blank", "comment"):
+        if ln.kind == "comment":
+            i -= 1
+            continue
+        if ln.kind == "blank":
+            # A blank line inside an item's children is skipped; one between items at the request's level stops.
+            if below <= level:
+                break
             i -= 1
             continue
         if ln.kind in ("heading", "meta"):
             break
+        below = ln.indent
         if ln.indent > level:
             i -= 1
             continue

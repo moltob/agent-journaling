@@ -217,7 +217,7 @@ A request is a task item tagged `#agent`, written as the **last** item of the co
 - [ ] #agent add to the KB under the sync service concept
 ```
 
-The request covers the items above it at the same level, with their children. Collection stops at the first of: the start of the parent item, a heading or a plain paragraph, an earlier `#agent` request at the same level. The parent item and the nearest heading are passed along as context.
+The request covers the items above it at the same level, with their children. Collection stops at the first of: the start of the parent item, a heading, a plain paragraph, an empty line between items at the request's level (empty lines inside an item's children don't count), an earlier `#agent` request at the same level. The parent item and the nearest heading are passed along as context.
 
 Nested requests work the same way, inside a parent item:
 

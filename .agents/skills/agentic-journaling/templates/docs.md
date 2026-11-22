@@ -5,3 +5,5 @@ Raise a request with a task item tagged `#agent`, as the last item of the notes 
     - Settings: folder Journal, newest first
 - [ ] #agent add this to the KB
 ```
+
+Source and setup: [moltob/agent-journaling on GitHub](https://github.com/moltob/agent-journaling#readme)
