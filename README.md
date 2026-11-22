@@ -1,6 +1,6 @@
 # Agentic Journaling
 
-An agent skill that turns `#agent` tasks in your Obsidian daily notes into actions. Write a request under the notes it is about; a scheduled agent run carries it out against a named target (a knowledge base folder, an issue tracker, …) and writes the status and a result link back to the request.
+An agent skill that turns `#agent` tasks in your Obsidian daily notes into actions. Write a request under the notes it is about. A scheduled agent run carries it out against a named target (a knowledge base folder, an issue tracker, …) and writes the status and a result link back to the request.
 
 ```markdown
 - Obsidian Journal View shows daily notes as one rolling page
@@ -13,32 +13,33 @@ becomes, after the next run:
 
 ```markdown
 - [x] #agent add this to the KB ^agent-7f3a
-    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run r7k2.
+    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run agent-7f3a-x9k2.
 ```
 
-No running Obsidian app is needed. Everything works on the vault files directly. The design is in [Agentic Journaling Skill Specification.md](Agentic%20Journaling%20Skill%20Specification.md).
+No running Obsidian app is needed; everything works on the vault files directly. It runs on Linux, macOS and Windows, under omp, GitHub Copilot or Claude.
 
 ## How it works
 
 - **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, request scope, block ids, status, feedback, compare-and-swap file writes and logging.
-- **The agent** does only what needs judgment: it matches each request to a target and follows that target's plain-language instructions in your config note. Each request runs in its own subagent, one at a time.
-- **State lives in the journal.** The checkbox is the status, a block id `^agent-xxxx` is the identity. There is no database.
+- **The agent** does only what needs judgment: it matches each request to a target and follows that target's plain-language instructions in your config note. Each request runs in its own subagent, one at a time, so the harness must provide a subagent tool (omp and Copilot: `task`, Claude: `Agent`).
+- **State lives in the journal.** The checkbox is the status; a block id `^agent-xxxx` is the identity. There is no database.
+- **Ids.** One invocation runs one **sweep** per journal (`s3k9`). Each request processed in it gets a **run** id made of its block id plus a suffix (`agent-7f3a-x9k2`), like a pod of a deployment. A retry of the same request keeps the block id and gets a new suffix.
 
 ```mermaid
 sequenceDiagram
-  participant T as systemd timer
-  participant O as omp (orchestrator)
+  participant T as scheduler
+  participant O as harness (orchestrator)
   participant S as aj.py
   participant A as subagent
-  T->>O: omp -p "Run the /agentic-journaling skill ..."
+  T->>O: run prompt
   O->>S: begin
-  S-->>O: claimed requests ([/] + block id), JSON
+  S-->>O: sweep id, claimed requests ([/] + block id + run id), JSON
   loop each request, one at a time
     O->>A: request + config note
     A-->>O: OK link/summary, or ERROR
     O->>S: report
   end
-  O->>S: end
+  O->>S: end (sweep-end with counts)
 ```
 
 ## Repository layout
@@ -48,20 +49,19 @@ sequenceDiagram
   SKILL.md               run procedure the agent follows
   scripts/aj.py          init, check, begin, report, end
   templates/docs.md      docs block rendered into each config note
-deploy/
+deploy/systemd/
   agentic-journal.service
   agentic-journal.timer
 README.md
 ```
 
-The skill sits in the repo-local skill directory `.agents/skills/`. A harness started with this checkout as working directory loads it; nothing is installed into your home directory. The run prompt also names the `SKILL.md` path explicitly.
+The skill sits in `.agents/skills/`, which omp and Copilot load from the working directory. The run prompt also names the `SKILL.md` path explicitly, so a harness that does not scan `.agents/skills/` (Claude reads only `.claude/skills/`) follows it as well. Nothing is installed into your home directory.
 
 ## Requirements
 
-- Linux with systemd (user manager) and journald
 - [`uv`](https://docs.astral.sh/uv/) (fetches Python ≥ 3.11 and PyYAML on first use)
 - [`rg`](https://github.com/BurntSushi/ripgrep) on `PATH`
-- `omp` (oh-my-pi), logged in to a model provider; the skill needs a harness with a subagent/task tool
+- One harness with a subagent tool, logged in to a model provider: `omp` (oh-my-pi), GitHub Copilot (app or CLI), or Claude (desktop app or Claude Code CLI)
 - An Obsidian vault with the Daily Notes core plugin configured (`.obsidian/daily-notes.json`)
 
 ## Install
@@ -77,22 +77,30 @@ The checkout is the installation. Update with `git pull`.
 
 ### 2. Register a journal
 
-`init` creates the machine file `~/.config/agentic-journal/config.yaml` (or adds to it) and a config note `Agentic Journaling.md` in the given journal folder. Pass the vault's Daily Notes folder: only that folder is scanned for requests.
+`init` creates the machine file (or adds to it) and a config note `Agentic Journaling.md` in the given journal folder. Pass the vault's Daily Notes folder: only that folder is scanned for requests.
 
 ```sh
-AJ=.agents/skills/agentic-journaling/scripts/aj.py
-uv run $AJ init --name main ~/Notes/Main/Journal
+uv run .agents/skills/agentic-journaling/scripts/aj.py init --name main ~/Notes/Main/Journal
 ```
 
-Resulting machine file:
+The machine file lives at:
+
+| OS | Machine file |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/agentic-journal/config.yaml` (default `~/.config/…`) |
+| macOS | `~/Library/Application Support/agentic-journal/config.yaml` |
+| Windows | `%APPDATA%\agentic-journal\config.yaml` |
 
 ```yaml
 version: 1
+log:                       # optional, see Logs
+  file: ~/logs/agentic-journal.log
+  retention_days: 30
 journals:
   main: ~/Notes/Main/Journal/Agentic Journaling.md
 ```
 
-More journals are more entries (`uv run $AJ init --name work ~/Notes/Work/Journal`). A run processes all of them; `--journal <name>` limits a command to one.
+More journals are more entries (`init --name work ~/Notes/Work/Journal`). A run processes all of them; `--journal <name>` limits a command to one.
 
 ### 3. Describe your targets
 
@@ -101,31 +109,34 @@ Open `Agentic Journaling.md` in Obsidian and add one `### <name>` section per ta
 ### 4. Check
 
 ```sh
-uv run $AJ check
+uv run .agents/skills/agentic-journaling/scripts/aj.py check
 ```
 
-`check` is read-only. It validates both files, lists targets and warns about empty sections or aliases shared by two targets, says whether the docs block would be re-rendered, previews every open request with the content it covers, and lists requests stuck at `[/]`.
+`check` is read-only. It validates both files, shows the log file, lists targets and warns about empty sections or aliases shared by two targets, says whether the docs block would be re-rendered, previews every open request with the content it covers, and lists requests stuck at `[/]`.
 
-### 5. Run once by hand
+## Running it
+
+Every harness gets the same run prompt, started with the checkout as its working directory:
+
+```text
+Run the /agentic-journaling skill: read .agents/skills/agentic-journaling/SKILL.md and follow it to run a propagation for every configured journal.
+```
+
+A run needs, without approval prompts: shell commands (`uv`, `rg`, plus whatever CLIs your target sections use, e.g. `gh`), file reads and edits in the vault, and the subagent tool. The vault usually lies outside the checkout, so grant access to it explicitly. A scheduled run that hits an approval prompt stalls.
+
+### omp, scheduled by systemd (Linux)
+
+Run once by hand:
 
 ```sh
 cd ~/work/agentic-journaling
 omp -p "Run the /agentic-journaling skill: read .agents/skills/agentic-journaling/SKILL.md and follow it to run a propagation for every configured journal."
 ```
 
-omp prints only its final summary. Watch the log lines live in a second terminal:
+Schedule it: link the units from the checkout and add a drop-in with your machine's settings.
 
 ```sh
-journalctl --user -t agentic-journal -f
-```
-
-### 6. Schedule with systemd
-
-Link the units from the checkout and add a drop-in with your machine's settings:
-
-```sh
-systemctl --user link ~/work/agentic-journaling/deploy/agentic-journal.service \
-                      ~/work/agentic-journaling/deploy/agentic-journal.timer
+systemctl --user link ~/work/agentic-journaling/deploy/systemd/agentic-journal.service ~/work/agentic-journaling/deploy/systemd/agentic-journal.timer
 systemctl --user edit agentic-journal.service
 ```
 
@@ -139,7 +150,7 @@ Environment=PATH=/home/linuxbrew/.linuxbrew/bin:%h/.local/bin:/usr/local/bin:/us
 EnvironmentFile=-%h/.config/agentic-journal/env
 ```
 
-The service does not read your shell profile, so `PATH` and any variables omp or a target section relies on (for example `GH_TOKEN`) must come from here or from the env file. Keep that file `chmod 600`.
+The service does not read your shell profile, so `PATH` and any variables omp or a target section relies on (for example `GH_TOKEN`) must come from here or from the env file. Keep that file `chmod 600`. `ExecStart` is `/usr/bin/env omp -p "<run prompt>"`, so `omp` is found through this `PATH`.
 
 Optional, a different schedule (default: hourly):
 
@@ -161,14 +172,35 @@ loginctl enable-linger "$USER"
 systemctl --user list-timers agentic-journal.timer
 ```
 
-`Persistent=true` starts a run missed during sleep on wake. `TimeoutStartSec=30min` stops a hung run; requests it had claimed stay at `[/]` (see [Troubleshooting](#troubleshooting)).
+`Persistent=true` starts a run missed during sleep on wake. `TimeoutStartSec=30min` stops a hung run; requests it had claimed stay at `[/]` (see [Troubleshooting](#troubleshooting)). `journalctl --user -u agentic-journal` shows omp's own output; the run log is in the log file. The full transcript is an omp session (`omp -r`).
 
-Start a scheduled-style run now, with exactly the service's environment:
+### GitHub Copilot, scheduled by a Copilot app automation (any OS)
+
+Run once by hand with the Copilot CLI (one line; works in bash and PowerShell):
 
 ```sh
-systemctl --user start --no-block agentic-journal.service
-journalctl --user -t agentic-journal -f
+copilot -C ~/work/agentic-journaling --add-dir ~/Notes/Main --allow-all-tools --no-ask-user -p "Run the /agentic-journaling skill: read .agents/skills/agentic-journaling/SKILL.md and follow it to run a propagation for every configured journal."
 ```
+
+`--add-dir` grants the vault; `--allow-all-tools` lets shell commands, edits and subagents run unprompted. Narrow it with `--allow-tool` if your targets use a known set of commands. Transcripts are kept under `~/.copilot/session-state/`.
+
+Schedule it in the GitHub Copilot app: **Automations → Create automation**. Prompt: the run prompt. Location: the **local folder** of the checkout (not a cloud automation: cloud runs cannot reach your vault). Trigger: a schedule. Start it once with the play button and check that it runs through without approval prompts.
+
+### Claude, scheduled by a Claude desktop scheduled task (any OS)
+
+Run once by hand with Claude Code, from the checkout:
+
+```sh
+claude -p "Run the /agentic-journaling skill: read .agents/skills/agentic-journaling/SKILL.md and follow it to run a propagation for every configured journal." --add-dir ~/Notes/Main --allowedTools "Bash,Read,Edit,Write,Agent"
+```
+
+On native Windows, Claude Code uses Git Bash when Git for Windows is installed, else PowerShell; both run the skill's one-line commands.
+
+Schedule it in the Claude desktop app, Code tab: **Scheduled → New task**. Instructions: the run prompt. Advanced settings: **Only on this computer**, local folder = the checkout. Pick a permission mode that does not ask for shell commands and edits, or click **Run now** once and answer each prompt with "always allow", including access to the vault folder.
+
+### Limits of app schedulers
+
+Copilot automations and Claude scheduled tasks run only while the app is open and the computer is awake. A slot missed during sleep is skipped or runs late. systemd has neither limit (`Persistent=true`, linger).
 
 ## Using it in your journal
 
@@ -207,7 +239,7 @@ A request with no items above it at its level is an error:
 ```markdown
 Some paragraph.
 - [ ] #agent add this to the KB
-    - Failed: the request has no items above it at the same list level. Run r7k2.
+    - Failed: the request has no items above it at the same list level. Run agent-c3d8-m2q7.
 ```
 
 ### Status
@@ -220,9 +252,11 @@ Some paragraph.
 | `[!]` | error | no |
 | `[-]` | cancelled | no |
 
-- **Retry:** set `[!]` (or `[x]`) back to `[ ]`. The next run keeps the block id and replaces its earlier feedback line; your own sub-items stay.
+- **Retry:** set `[!]` (or `[x]`) back to `[ ]`. The next run keeps the block id, gets a new run id and replaces its earlier feedback line; your own sub-items stay.
 - **Cancel:** set `[-]` before the next run.
+- **Interrupted runs:** a request left at `[/]` is never reclaimed. Each sweep logs an `error` line for it and `check` lists it. Set it back to `[ ]` to retry.
 - Files changed in the last 30 s are skipped, so a run never picks up a request you are still typing. They are processed by the next run.
+- Files keep their line endings: a CRLF note stays CRLF.
 
 ### Feedback
 
@@ -230,11 +264,11 @@ The run writes one sub-item under the request, in plain sentences, ending with t
 
 ```markdown
 - [x] #agent add this to the KB ^agent-7f3a
-    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff. Run r7k2.
+    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff. Run agent-7f3a-x9k2.
 - [x] #agent open an issue in atlas ^agent-k2p9
-    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run r7k2.
+    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run agent-k2p9-7hvd.
 - [!] #agent add this to the wiki ^agent-q81m
-    - Failed: "wiki" matches both kb and docs. Run r7k2.
+    - Failed: "wiki" matches both kb and docs. Run agent-q81m-b05n.
 ```
 
 ## Example config note
@@ -295,44 +329,51 @@ Write target sections like an instructions file for a careful colleague: where t
 
 ## Logs
 
-Each event is one line: an ISO 8601 timestamp, then logfmt pairs. Every line has `run=` and `ev=`; lines about a request have `id=`.
+Every `aj.py` call writes its events to the log file and prints the same lines on stdout (where the agent sees them). Each event is one line: an ISO 8601 timestamp, then logfmt pairs.
 
 ```text
-2026-11-21T14:03:12+01:00 run=r7k2 ev=discover id=agent-7f3a file="Journal/2026-11-21.md" text="add this to the KB"
+2026-11-21T14:03:12+01:00 sweep=s3k9 ev=discover run=agent-7f3a-x9k2 block=agent-7f3a file="Journal/2026-11-21.md" text="add this to the KB"
 ```
+
+Every line has `sweep=` and `ev=`. Lines about a request also have `run=` and `block=`; `sweep-start` and `sweep-end` have `journal=`.
 
 | `ev` | When |
 | --- | --- |
-| `run-start` | a run starts for a journal (`journal=`) |
-| `discover` | a request got its id and `[/]` |
+| `sweep-start` | a sweep starts for a journal |
+| `discover` | a request got its block id, run id and `[/]` |
 | `action` | the target step finished (`target`, `link` and `summary`, or `error`) |
 | `state` | the final status was written (`status=done`/`error`) |
 | `error` | a step failed, or a request is stuck at `[/]` |
 | `skipped` | a request could not be claimed; it stays `[ ]` for the next run |
-| `run-end` | the run ends |
+| `sweep-end` | the sweep ends: `duration`, `found`, `completed`, `failed`, `skipped` |
 
-The lines go to stdout and, from every run (timer or manual), to journald under the identifier `agentic-journal`:
+`found` counts the requests the sweep picked up (`discover` plus `skipped`). When a `report` failed to write its result, `completed + failed + skipped` is less than `found`.
+
+**Where.** `log.file` in the machine file, or by default:
+
+| OS | Log file |
+| --- | --- |
+| Linux | `$XDG_STATE_HOME/agentic-journal/agentic-journal.log` (default `~/.local/state/…`) |
+| macOS | `~/Library/Logs/agentic-journal/agentic-journal.log` |
+| Windows | `%LOCALAPPDATA%\agentic-journal\agentic-journal.log` |
+
+**Rotation and retention.** At its start, each `aj.py` call renames a log last written on an earlier day to `agentic-journal.log.YYYY-MM-DD`, and deletes rotated files older than `log.retention_days` (default 30). If the file is in use and cannot be renamed, the next call retries.
+
+**Queries.**
 
 ```sh
-journalctl --user -t agentic-journal -g agent-7f3a      # one request's history
-journalctl --user -t agentic-journal -g 'run=r7k2'      # one run
-journalctl --user -t agentic-journal -g 'ev=state' --since today
-journalctl --user -u agentic-journal                    # timer runs incl. omp's own output
+grep agent-7f3a ~/.local/state/agentic-journal/agentic-journal.log*          # every run of one request
+grep agent-7f3a-x9k2 ~/.local/state/agentic-journal/agentic-journal.log*     # one run
+grep 'sweep=s3k9 ' ~/.local/state/agentic-journal/agentic-journal.log*       # one sweep
 ```
 
-Retention is journald's. The agent's full transcript of a run is kept as an omp session (`omp -r`).
+```powershell
+Select-String agent-7f3a "$env:LOCALAPPDATA\agentic-journal\agentic-journal.log*"
+```
 
 ## Troubleshooting
 
-- **A request stays `[/]`.** A run was interrupted (timeout, crash, sleep) after claiming it. Runs never reclaim these; each run logs an `error` line for them and `check` lists them. Set the checkbox back to `[ ]`.
-- **`skipped` in the log.** The note changed while the run was claiming the request, more than 3 retries in a row. The request stays `[ ]` for the next run.
-- **Nothing happens.** Run `uv run $AJ check`: is the request in the Daily Notes folder, a task item (`- [ ]`), outside code and comments, and its file not changed in the last 30 s?
-- **Service fails with "omp: No such file or directory".** `PATH` in the drop-in is missing omp's folder.
-
-## Deviations from the specification
-
-- **Log output:** the scripts run inside the agent's tool calls, so their stdout reaches the agent, not the service. Each line is therefore also sent straight to journald (`SYSLOG_IDENTIFIER=agentic-journal`), from timer and manual runs alike. Query with `-t agentic-journal`; `-u agentic-journal` additionally shows omp's own output but only for timer runs. A manual run does not print log lines in its terminal; follow them with `journalctl --user -t agentic-journal -f`.
-- **`run-end`** carries only `run=`: no duration and no `found`/`completed`/`failed`/`skipped` counts. Count from the log (`-g 'run=r7k2'`). Every run writes `run-start` … `run-end`, also when it finds nothing.
-- **Service:** `ExecStart=/usr/bin/env omp -p "<run prompt>"`, so `omp` is resolved through the drop-in's `PATH`. The checkout path, `PATH` and environment live in a drop-in, not in the repo unit. `TimeoutStartSec=30min`.
-- **Stuck `[/]` requests** are reported (`check`, an `error` line per run) but never reclaimed.
-- **Subagents:** each request runs in its own subagent, sequentially; the harness must provide a subagent/task tool.
+- **A request stays `[/]`.** A run was interrupted (timeout, crash, sleep, app closed) after claiming it. See Status → Interrupted runs.
+- **`skipped` in the log.** The note changed while the run was claiming the request (or, on Windows, stayed locked by another program) through 3 retries in a row. The request stays `[ ]` for the next run.
+- **Nothing happens.** Run `check`: is the request in the Daily Notes folder, a task item (`- [ ]`), outside code and comments, and its file not changed in the last 30 s? Is the scheduled run stalled at an approval prompt?
+- **systemd service fails with "omp: No such file or directory".** `PATH` in the drop-in is missing omp's folder.

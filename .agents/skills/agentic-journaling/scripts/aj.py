@@ -8,9 +8,9 @@
 Commands:
   init   create the machine file entry and a config note in a journal folder
   check  validate configuration and preview open and stuck requests (read-only)
-  begin  start runs: log run-start, render docs, discover and claim requests
+  begin  start sweeps: log sweep-start, render docs, discover and claim requests
   report write one request's result (done or error) back to the journal
-  end    log run-end for runs started by begin
+  end    log sweep-end, with counts, for sweeps started by begin
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -32,7 +32,7 @@ from pathlib import Path
 
 import yaml
 
-# Constants fixed by the specification.
+# Fixed constants.
 TAG = "#agent"
 ID_PREFIX = "agent-"
 TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -46,8 +46,8 @@ SCHEMA_VERSION = 1
 CONFIG_NOTE_NAME = "Agentic Journaling.md"
 DOCS_START = "%% agentic-journal:docs start (maintained by the agent, edits here are replaced) %%"
 DOCS_END = "%% agentic-journal:docs end %%"
-LOG_IDENTIFIER = "agentic-journal"
-JOURNALD_SOCKET = "/run/systemd/journal/socket"
+LOG_NAME = "agentic-journal"
+DEFAULT_RETENTION_DAYS = 30
 
 SCRIPT = Path(__file__).resolve()
 DOCS_TEMPLATE = SCRIPT.parent.parent / "templates" / "docs.md"
@@ -59,8 +59,10 @@ STATUS_RE = re.compile(r"^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[).(\])")
 HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 AGENT_ID_RE = re.compile(r"[ \t]+\^(agent-[a-z0-9]{4})[ \t]*$")
+RUN_ID_RE = re.compile(r"^(agent-[a-z0-9]{4})-[a-z0-9]{4}$")
 BLOCK_ID_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
-FEEDBACK_RE = re.compile(r"\bRun r[a-z0-9]{3}\.[ \t]*$")
+FEEDBACK_RE = re.compile(r"\bRun agent-[a-z0-9]{4}-[a-z0-9]{4}\.[ \t]*$")
+LOGFMT_RE = re.compile(r'([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S*)')
 ALIASES_RE = re.compile(r"^aliases:[ \t]*(.*)$", re.IGNORECASE)
 URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 
@@ -83,54 +85,142 @@ def _fmt(value: object) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
 
-class Log:
-    """One logfmt line per event on stdout, mirrored to journald when its socket exists."""
+class LogfmtFormatter(logging.Formatter):
+    """An ISO 8601 timestamp, then logfmt pairs: sweep, ev, then the record's fields."""
 
-    def __init__(self) -> None:
-        self.sock: socket.socket | None = None
-        try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            sock.connect(JOURNALD_SOCKET)
-            self.sock = sock
-        except OSError:
-            self.sock = None
-
-    def emit(self, run: str, ev: str, **fields: object) -> None:
-        stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-        parts = [stamp, f"run={run}", f"ev={ev}"]
+    def format(self, record: logging.LogRecord) -> str:
+        stamp = dt.datetime.fromtimestamp(record.created).astimezone().isoformat(timespec="seconds")
+        fields: dict = dict(getattr(record, "fields", {}))
+        parts = [stamp, f"sweep={_fmt(fields.pop('sweep', '-'))}", f"ev={_fmt(record.getMessage())}"]
         parts += [f"{k}={_fmt(v)}" for k, v in fields.items() if v is not None]
-        line = " ".join(parts)
-        print(line, flush=True)
-        if self.sock is None:
-            return
-        priority = 3 if ev == "error" else 6
-        payload = f"MESSAGE={line}\nSYSLOG_IDENTIFIER={LOG_IDENTIFIER}\nPRIORITY={priority}\n"
+        return " ".join(parts)
+
+
+_logger = logging.getLogger(LOG_NAME)
+
+
+def log(ev: str, **fields: object) -> None:
+    """One event: a single logging call reaches the log file and stdout."""
+    _logger.log(logging.ERROR if ev == "error" else logging.INFO, ev, extra={"fields": fields})
+
+
+def rotate_log(path: Path, retention_days: int) -> None:
+    """Daily rotation and retention, done once at process start.
+
+    Several short-lived processes share the file, so a handler that renames it mid-run would break
+    (on Windows the rename fails while another process holds the file). A failed rename leaves the
+    file in place; the next process retries.
+    """
+    today = dt.date.today()
+    try:
+        last = dt.date.fromtimestamp(path.stat().st_mtime)
+        rotated = path.with_name(f"{path.name}.{last.isoformat()}")
+        if last < today and not rotated.exists():
+            os.rename(path, rotated)
+    except OSError:
+        pass
+    cutoff = today - dt.timedelta(days=retention_days)
+    for old in path.parent.glob(f"{path.name}.*"):
         try:
-            self.sock.send(payload.encode())
+            if dt.date.fromisoformat(old.name[len(path.name) + 1 :]) < cutoff:
+                old.unlink()
+        except (ValueError, OSError):
+            pass
+
+
+def setup_logging(machine: Machine) -> None:
+    machine.log_file.parent.mkdir(parents=True, exist_ok=True)
+    rotate_log(machine.log_file, machine.retention_days)
+    formatter = LogfmtFormatter()
+    for handler in (logging.FileHandler(machine.log_file, encoding="utf-8"), logging.StreamHandler(sys.stdout)):
+        handler.setFormatter(formatter)
+        _logger.addHandler(handler)
+    _logger.setLevel(logging.INFO)
+    _logger.propagate = False
+
+
+def sweep_lines(machine: Machine, sweep: str) -> list[tuple[str, dict[str, str]]]:
+    """(timestamp, fields) of every log line of one sweep, from the current and the newest rotated file."""
+    path = machine.log_file
+    rotated = sorted(path.parent.glob(f"{path.name}.*"))
+    needle = re.compile(rf"(?:^| )sweep={re.escape(sweep)}(?: |$)")
+    out = []
+    for f in [*rotated[-1:], path]:
+        try:
+            text = f.read_text(encoding="utf-8")
         except OSError:
-            self.sock = None
+            continue
+        for line in text.splitlines():
+            if needle.search(line):
+                stamp, _, rest = line.partition(" ")
+                out.append((stamp, {k: (json.loads(v) if v.startswith('"') else v) for k, v in LOGFMT_RE.findall(rest)}))
+    return out
+
+
+def end_sweep(machine: Machine, sweep: str, journal: str | None = None) -> None:
+    lines = sweep_lines(machine, sweep)
+    evs = [f.get("ev") for _, f in lines]
+    states = [f.get("status") for _, f in lines if f.get("ev") == "state"]
+    start = next((s for s, f in lines if f.get("ev") == "sweep-start"), None)
+    journal = journal or next((f.get("journal") for _, f in lines if f.get("ev") == "sweep-start"), None)
+    duration = None
+    if start:
+        try:
+            duration = f"{(dt.datetime.now().astimezone() - dt.datetime.fromisoformat(start)).total_seconds():.0f}s"
+        except ValueError:
+            pass
+    log("sweep-end", sweep=sweep, journal=journal, duration=duration,
+        found=evs.count("discover") + evs.count("skipped"), completed=states.count(STATUS_NAMES[DONE]),
+        failed=states.count(STATUS_NAMES[ERROR]), skipped=evs.count("skipped"))
 
 
 # ---------------------------------------------------------------- configuration
 
 
+def _home_dir(windows_var: str, mac: str, xdg_var: str, xdg_default: str) -> Path:
+    if os.name == "nt":
+        return Path(os.environ[windows_var])
+    if sys.platform == "darwin":
+        return Path.home() / mac
+    return Path(os.environ.get(xdg_var) or xdg_default).expanduser()
+
+
 def machine_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
-    return Path(base).expanduser() / "agentic-journal" / "config.yaml"
+    base = _home_dir("APPDATA", "Library/Application Support", "XDG_CONFIG_HOME", "~/.config")
+    return base / LOG_NAME / "config.yaml"
 
 
-def load_machine() -> dict[str, Path]:
+def default_log_file() -> Path:
+    base = _home_dir("LOCALAPPDATA", "Library/Logs", "XDG_STATE_HOME", "~/.local/state")
+    return base / LOG_NAME / f"{LOG_NAME}.log"
+
+
+@dataclass
+class Machine:
+    journals: dict[str, Path]
+    log_file: Path
+    retention_days: int
+
+
+def load_machine() -> Machine:
     path = machine_path()
     if not path.exists():
         raise AJError(f"machine file {path} not found; create it with: uv run {SCRIPT} init --name <name> <journal folder>")
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise AJError(f"{path}: expected a mapping")
-    unknown = sorted(set(data) - {"version", "journals"})
+    unknown = sorted(set(data) - {"version", "log", "journals"})
     if unknown:
         raise AJError(f"{path}: unknown keys {', '.join(unknown)}")
     if data.get("version", SCHEMA_VERSION) != SCHEMA_VERSION:
         raise AJError(f"{path}: unsupported version {data.get('version')!r}, expected {SCHEMA_VERSION}")
+    log_cfg = data.get("log") or {}
+    if not isinstance(log_cfg, dict) or set(log_cfg) - {"file", "retention_days"}:
+        raise AJError(f"{path}: log takes only file and retention_days")
+    log_file = Path(log_cfg["file"]).expanduser() if log_cfg.get("file") else default_log_file()
+    retention = log_cfg.get("retention_days", DEFAULT_RETENTION_DAYS)
+    if not isinstance(retention, int) or isinstance(retention, bool) or retention < 1:
+        raise AJError(f"{path}: log.retention_days must be a whole number of days, at least 1")
     journals = data.get("journals")
     if not isinstance(journals, dict) or not journals:
         raise AJError(f"{path}: journals needs at least one <name>: <config note path> entry")
@@ -139,7 +229,7 @@ def load_machine() -> dict[str, Path]:
         if not isinstance(note, str) or not note.strip():
             raise AJError(f"{path}: journals.{name} must be a path to a config note")
         out[str(name)] = Path(note).expanduser()
-    return out
+    return Machine(out, log_file, retention)
 
 
 @dataclass
@@ -534,11 +624,14 @@ def cas_write(path: Path, mutate, verify) -> bool:
         tmp.write_bytes(new.encode("utf-8"))
         shutil.copymode(path, tmp)
         if _signature(path)[1] == sig:
-            os.replace(tmp, path)
-            break
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                pass  # Windows: another process holds the file; retry like a concurrent change.
         tmp.unlink(missing_ok=True)
         if attempt == CAS_RETRIES:
-            raise AJError(f"{path} kept changing during {CAS_RETRIES} retries")
+            raise AJError(f"{path} kept changing or stayed locked during {CAS_RETRIES} retries")
         time.sleep(delay)
         delay *= 2
     time.sleep(VERIFY_DELAY_S)
@@ -704,31 +797,30 @@ def claim(journal: Journal, req: Found, rid: str) -> None:
 # ---------------------------------------------------------------- commands
 
 
-def journals_from(machine: dict[str, Path], only: str | None) -> list[str]:
+def journals_from(machine: Machine, only: str | None) -> list[str]:
     if only is None:
-        return list(machine)
-    if only not in machine:
-        raise AJError(f"journal {only!r} is not in {machine_path()} (known: {', '.join(machine)})")
+        return list(machine.journals)
+    if only not in machine.journals:
+        raise AJError(f"journal {only!r} is not in {machine_path()} (known: {', '.join(machine.journals)})")
     return [only]
 
 
 def cmd_begin(args: argparse.Namespace) -> int:
-    log = Log()
     machine = load_machine()
+    setup_logging(machine)
     results = []
     for name in journals_from(machine, args.journal):
-        run = "r" + new_token(3)
-        entry: dict = {"journal": name, "run": run, "ended": False, "requests": []}
+        sweep = "s" + new_token(4)
+        entry: dict = {"journal": name, "sweep": sweep, "ended": False, "requests": []}
         results.append(entry)
+        log("sweep-start", sweep=sweep, journal=name)
         try:
-            journal = load_journal(name, machine[name])
+            journal = load_journal(name, machine.journals[name])
         except AJError as exc:
-            log.emit(run, "run-start", journal=name)
-            log.emit(run, "error", message=str(exc))
-            log.emit(run, "run-end")
+            log("error", sweep=sweep, message=str(exc))
+            end_sweep(machine, sweep, name)
             entry.update(ended=True, error=str(exc))
             continue
-        log.emit(run, "run-start", journal=name)
         entry.update(
             vault=str(journal.vault),
             config_note=str(journal.note),
@@ -737,42 +829,44 @@ def cmd_begin(args: argparse.Namespace) -> int:
         try:
             cas_write(journal.note, apply_docs, lambda text: apply_docs(text) == text)
         except (AJError, OSError) as exc:
-            log.emit(run, "error", message=f"docs block not rendered: {exc}")
+            log("error", sweep=sweep, message=f"docs block not rendered: {exc}")
         try:
             open_, stuck, _recent = discover(journal)
             ids = existing_ids(journal)
         except (AJError, OSError) as exc:
-            log.emit(run, "error", message=str(exc))
-            log.emit(run, "run-end")
+            log("error", sweep=sweep, message=str(exc))
+            end_sweep(machine, sweep, name)
             entry.update(ended=True, error=str(exc))
             continue
         for s in stuck:
-            log.emit(run, "error", id=s.rid, file=journal.rel(s.path), line=s.idx + 1,
-                     message="in progress, not claimed by this run")
+            log("error", sweep=sweep, block=s.rid, file=journal.rel(s.path), line=s.idx + 1,
+                message="in progress, not claimed by this sweep")
         claimed = []
         # Bottom-up per file, so feedback lines inserted below a request never shift the ones above it.
         for req in sorted(open_, key=lambda f: (str(f.path), -f.idx)):
-            rid = req.rid
-            while rid is None or (rid in ids and rid != req.rid):
-                rid = ID_PREFIX + new_token(4)
-            ids.add(rid)
+            block = req.rid
+            while block is None or (block in ids and block != req.rid):
+                block = ID_PREFIX + new_token(4)
+            ids.add(block)
+            run = f"{block}-{new_token(4)}"
             rel = journal.rel(req.path)
             try:
-                claim(journal, req, rid)
+                claim(journal, req, block)
             except (AJError, OSError) as exc:
-                log.emit(run, "skipped", file=rel, line=req.idx + 1, message=str(exc))
+                log("skipped", sweep=sweep, block=req.rid, file=rel, line=req.idx + 1, message=str(exc))
                 continue
-            log.emit(run, "discover", id=rid, file=rel, text=req.instruction)
+            log("discover", sweep=sweep, run=run, block=block, file=rel, text=req.instruction)
             if req.scope.error:
-                log.emit(run, "error", id=rid, message=req.scope.error)
+                log("error", sweep=sweep, run=run, block=block, message=req.scope.error)
                 try:
-                    finalize(journal, req.path, rid, ERROR, feedback_error(run, req.scope.error))
-                    log.emit(run, "state", id=rid, status=STATUS_NAMES[ERROR])
+                    finalize(journal, req.path, block, ERROR, feedback_error(run, req.scope.error))
+                    log("state", sweep=sweep, run=run, block=block, status=STATUS_NAMES[ERROR])
                 except (AJError, OSError) as exc:
-                    log.emit(run, "error", id=rid, message=f"could not write the scope error: {exc}")
+                    log("error", sweep=sweep, run=run, block=block, message=f"could not write the scope error: {exc}")
                 continue
             claimed.append({
-                "id": rid,
+                "run": run,
+                "block": block,
                 "file": rel,
                 "line": req.idx + 1,
                 "instruction": req.instruction,
@@ -782,7 +876,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
             })
         entry["requests"] = sorted(claimed, key=lambda r: (r["file"], r["line"]))
         if not claimed:
-            log.emit(run, "run-end")
+            end_sweep(machine, sweep, name)
             entry["ended"] = True
     print("== begin result ==")
     print(json.dumps(results, indent=2, ensure_ascii=False))
@@ -790,36 +884,39 @@ def cmd_begin(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    log = Log()
-    rid = args.id.lstrip("^")
-    if not re.fullmatch(r"agent-[a-z0-9]{4}", rid):
-        raise AJError(f"--id must look like agent-xxxx, got {args.id!r}")
-    machine = load_machine()
-    journal = load_journal(args.journal, machine[journals_from(machine, args.journal)[0]])
+    m = RUN_ID_RE.fullmatch(args.run)
+    if not m:
+        raise AJError(f"--run must look like agent-xxxx-xxxx, got {args.run!r}")
+    block = m.group(1)
     if args.error is None and (args.link is None or args.summary is None):
         raise AJError("report needs --link and --summary, or --error")
-    log.emit(args.run, "action", id=rid, target=args.target, link=args.link,
-             summary=args.summary, error=args.error)
+    machine = load_machine()
+    name = journals_from(machine, args.journal)[0]
+    journal = load_journal(name, machine.journals[name])
+    setup_logging(machine)
+    ids = {"sweep": args.sweep, "run": args.run, "block": block}
+    log("action", **ids, target=args.target, link=args.link, summary=args.summary, error=args.error)
     if args.error is not None:
         status, text = ERROR, feedback_error(args.run, args.error)
     else:
         status, text = DONE, feedback_ok(args.run, args.link, args.summary, args.title, args.change)
     try:
-        files = [p for p in rg_files(f"^{rid}", journal.folder) if p.resolve() != journal.note]
+        files = [p for p in rg_files(f"^{block}", journal.folder) if p.resolve() != journal.note]
         if len(files) != 1:
-            raise Gone(f"^{rid} found in {len(files)} files under {journal.rel(journal.folder) or '.'}")
-        finalize(journal, files[0], rid, status, text)
+            raise Gone(f"^{block} found in {len(files)} files under {journal.rel(journal.folder) or '.'}")
+        finalize(journal, files[0], block, status, text)
     except (AJError, OSError) as exc:
-        log.emit(args.run, "error", id=rid, message=str(exc))
+        log("error", **ids, message=str(exc))
         return 1
-    log.emit(args.run, "state", id=rid, status=STATUS_NAMES[status])
+    log("state", **ids, status=STATUS_NAMES[status])
     return 0
 
 
 def cmd_end(args: argparse.Namespace) -> int:
-    log = Log()
-    for run in args.run:
-        log.emit(run, "run-end")
+    machine = load_machine()
+    setup_logging(machine)
+    for sweep in args.sweep:
+        end_sweep(machine, sweep)
     return 0
 
 
@@ -832,10 +929,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     except AJError as exc:
         print(f"  ERROR {exc}")
         return 1
+    print(f"log file: {machine.log_file} (kept {machine.retention_days} days)")
     for name in names:
-        print(f"\njournal {name}: {machine[name]}")
+        print(f"\njournal {name}: {machine.journals[name]}")
         try:
-            journal = load_journal(name, machine[name])
+            journal = load_journal(name, machine.journals[name])
         except AJError as exc:
             print(f"  ERROR {exc}")
             errors += 1
@@ -929,14 +1027,14 @@ def main() -> int:
     p.add_argument("--journal")
     p.set_defaults(fn=cmd_check)
 
-    p = sub.add_parser("begin", help="start runs and claim open requests")
+    p = sub.add_parser("begin", help="start sweeps and claim open requests")
     p.add_argument("--journal")
     p.set_defaults(fn=cmd_begin)
 
     p = sub.add_parser("report", help="write one request's result")
     p.add_argument("--journal", required=True)
-    p.add_argument("--run", required=True)
-    p.add_argument("--id", required=True, help="agent-xxxx")
+    p.add_argument("--sweep", required=True, help="sxxxx, from the begin result")
+    p.add_argument("--run", required=True, help="agent-xxxx-xxxx, from the begin result")
     p.add_argument("--target", help="matched target name")
     p.add_argument("--link", help="result: vault-relative path or URL")
     p.add_argument("--title", help="link text; default: file name or URL")
@@ -945,10 +1043,11 @@ def main() -> int:
     p.add_argument("--error", help="one sentence on why it failed")
     p.set_defaults(fn=cmd_report)
 
-    p = sub.add_parser("end", help="log run-end")
-    p.add_argument("--run", required=True, action="append")
+    p = sub.add_parser("end", help="log sweep-end with counts")
+    p.add_argument("--sweep", required=True, action="append")
     p.set_defaults(fn=cmd_end)
 
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy code page.
     args = parser.parse_args()
     try:
         return args.fn(args)

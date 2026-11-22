@@ -31,10 +31,10 @@ After a run, the request carries a block id and a feedback sub-item:
 
 ```markdown
 - [x] #agent add this to the KB ^agent-7f3a
-    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run r7k2.
+    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run agent-7f3a-x9k2.
 ```
 
-Set a request back to `[ ]` to run it again; the next run replaces its feedback. A request left at `[/]` by an interrupted run stays there until you set it back to `[ ]`.
+Set a request back to `[ ]` to run it again; the next run keeps the block id, gets a new run id (`^agent-7f3a` → run `agent-7f3a-p4m1`) and replaces its feedback. A request left at `[/]` by an interrupted run stays there until you set it back to `[ ]`.
 
 ## Configured targets
 
