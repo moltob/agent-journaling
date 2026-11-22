@@ -12,8 +12,8 @@ An agent skill that turns `#agent` tasks in your Obsidian daily notes into actio
 becomes, after the next run:
 
 ```markdown
-- [x] #agent add this to the KB ^agent-7f3a
-    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run agent-7f3a-x9k2.
+- [x] #agent add this to the KB ^aj-block-7f3a
+    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run aj-run-x9k2.
 ```
 
 No running Obsidian app is needed; everything works on the vault files directly. It runs on Linux, macOS and Windows, under omp, GitHub Copilot or Claude.
@@ -22,8 +22,8 @@ No running Obsidian app is needed; everything works on the vault files directly.
 
 - **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, request scope, block ids, status, feedback, compare-and-swap file writes and logging.
 - **The agent** does only what needs judgment: it matches each request to a target and follows that target's plain-language instructions in your config note. Each request runs in its own subagent, one at a time, so the harness must provide a subagent tool (omp and Copilot: `task`, Claude: `Agent`).
-- **State lives in the journal.** The checkbox is the status; a block id `^agent-xxxx` is the identity. There is no database.
-- **Ids.** One invocation runs one **sweep** per journal (`s3k9`). Each request processed in it gets a **run** id made of its block id plus a suffix (`agent-7f3a-x9k2`), like a pod of a deployment. A retry of the same request keeps the block id and gets a new suffix.
+- **State lives in the journal.** The checkbox is the status; a block id `^aj-block-xxxx` is the identity. There is no database.
+- **Ids.** One invocation runs one **sweep** per journal (`aj-sweep-3k9q`). Each request processed in it gets its own **run** id (`aj-run-x9k2`); a retry of the same request keeps its block id (`aj-block-7f3a`) and gets a new run id. Log lines about a request carry both.
 
 ```mermaid
 sequenceDiagram
@@ -239,7 +239,7 @@ A request with no items above it at its level is an error:
 ```markdown
 Some paragraph.
 - [ ] #agent add this to the KB
-    - Failed: the request has no items above it at the same list level. Run agent-c3d8-m2q7.
+    - Failed: the request has no items above it at the same list level. Run aj-run-m2q7.
 ```
 
 ### Status
@@ -263,12 +263,12 @@ Some paragraph.
 The run writes one sub-item under the request, in plain sentences, ending with the run id:
 
 ```markdown
-- [x] #agent add this to the KB ^agent-7f3a
-    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff. Run agent-7f3a-x9k2.
-- [x] #agent open an issue in atlas ^agent-k2p9
-    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run agent-k2p9-7hvd.
-- [!] #agent add this to the wiki ^agent-q81m
-    - Failed: "wiki" matches both kb and docs. Run agent-q81m-b05n.
+- [x] #agent add this to the KB ^aj-block-7f3a
+    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff. Run aj-run-x9k2.
+- [x] #agent open an issue in atlas ^aj-block-k2p9
+    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run aj-run-7hvd.
+- [!] #agent add this to the wiki ^aj-block-q81m
+    - Failed: "wiki" matches both kb and docs. Run aj-run-b05n.
 ```
 
 ## Example config note
@@ -282,7 +282,7 @@ agentic-journal: 1
 # Agentic Journaling
 
 %% agentic-journal:docs start (maintained by the agent, edits here are replaced) %%
-… rendered by the scripts: how requests work, status table, list of targets …
+… rendered by the scripts: how to raise a request …
 %% agentic-journal:docs end %%
 
 ## Targets
@@ -291,11 +291,11 @@ agentic-journal: 1
 
 Aliases: KB, knowledge base, wiki
 
-The knowledge base is the folder `KB/` in this vault. It is an OKF bundle and follows the Open Knowledge Format v0.2 spec. Every `.md` file in it is a concept, except `index.md` and `log.md`.
+The knowledge base is the folder `KB/` in this vault. It is an OKF bundle and follows the Open Knowledge Format v0.3 spec. Every `.md` file in it with a `type` in its frontmatter is a concept; `index.md` and `log.md` are reserved.
 
 - Update an existing concept when it covers the same subject. Otherwise create one.
-- New concept: file name from the title, frontmatter `type`, `title`, `description`, `tags`.
-- Add a `sources` entry with `id` = the request's block id, linking back to the journal block.
+- New concept: file name = the title, frontmatter `type`, `title`, `description`, `tags`, then the H1 (same as the file name) right after the frontmatter.
+- Add a `sources` entry for the daily note the request is in (relative path, no block reference).
 - Use relative Markdown links.
 - Update the folder's `index.md` and `log.md`.
 
@@ -309,7 +309,7 @@ Issues for Project Atlas live in the GitHub repository `me/atlas`. Use the `gh` 
 
 - Search open issues first (`gh issue list --repo me/atlas --search ...`). If one covers the same problem, add a comment with the new details instead of opening a new issue.
 - New issue: a short imperative title, the covered content as the body, label `from-journal`.
-- End the body or comment with "Source: journal request ^<block id>".
+- End the body or comment with "Source: journal of <note date>".
 
 Return the issue URL, created or updated, and one sentence on what was filed.
 
@@ -332,7 +332,7 @@ Write target sections like an instructions file for a careful colleague: where t
 Every `aj.py` call writes its events to the log file and prints the same lines on stdout (where the agent sees them). Each event is one line: an ISO 8601 timestamp, then logfmt pairs.
 
 ```text
-2026-11-21T14:03:12+01:00 sweep=s3k9 ev=discover run=agent-7f3a-x9k2 block=agent-7f3a file="Journal/2026-11-21.md" text="add this to the KB"
+2026-11-21T14:03:12+01:00 sweep=aj-sweep-3k9q ev=discover run=aj-run-x9k2 block=aj-block-7f3a file="Journal/2026-11-21.md" text="add this to the KB"
 ```
 
 Every line has `sweep=` and `ev=`. Lines about a request also have `run=` and `block=`; `sweep-start` and `sweep-end` have `journal=`.
@@ -362,13 +362,13 @@ Every line has `sweep=` and `ev=`. Lines about a request also have `run=` and `b
 **Queries.**
 
 ```sh
-grep agent-7f3a ~/.local/state/agentic-journal/agentic-journal.log*          # every run of one request
-grep agent-7f3a-x9k2 ~/.local/state/agentic-journal/agentic-journal.log*     # one run
-grep 'sweep=s3k9 ' ~/.local/state/agentic-journal/agentic-journal.log*       # one sweep
+grep aj-block-7f3a ~/.local/state/agentic-journal/agentic-journal.log*        # every run of one request
+grep aj-run-x9k2 ~/.local/state/agentic-journal/agentic-journal.log*          # one run
+grep 'sweep=aj-sweep-3k9q ' ~/.local/state/agentic-journal/agentic-journal.log*   # one sweep
 ```
 
 ```powershell
-Select-String agent-7f3a "$env:LOCALAPPDATA\agentic-journal\agentic-journal.log*"
+Select-String aj-block-7f3a "$env:LOCALAPPDATA\agentic-journal\agentic-journal.log*"
 ```
 
 ## Troubleshooting

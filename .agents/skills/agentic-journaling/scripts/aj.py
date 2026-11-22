@@ -34,7 +34,9 @@ import yaml
 
 # Fixed constants.
 TAG = "#agent"
-ID_PREFIX = "agent-"
+ID_PREFIX = "aj-block-"
+RUN_PREFIX = "aj-run-"
+SWEEP_PREFIX = "aj-sweep-"
 TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 OPEN, IN_PROGRESS, DONE, ERROR, CANCELLED = " ", "/", "x", "!", "-"
 STATUS_NAMES = {OPEN: "open", IN_PROGRESS: "in-progress", DONE: "done", ERROR: "error", CANCELLED: "cancelled"}
@@ -58,10 +60,11 @@ TASK_RE = re.compile(r"^\[(.)\](?=[ \t]|$)")
 STATUS_RE = re.compile(r"^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[).(\])")
 HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
-AGENT_ID_RE = re.compile(r"[ \t]+\^(agent-[a-z0-9]{4})[ \t]*$")
-RUN_ID_RE = re.compile(r"^(agent-[a-z0-9]{4})-[a-z0-9]{4}$")
+AGENT_ID_RE = re.compile(r"[ \t]+\^(aj-block-[a-z0-9]{4})[ \t]*$")
+RUN_ID_RE = re.compile(r"^aj-run-[a-z0-9]{4}$")
+BLOCK_ARG_RE = re.compile(r"^aj-block-[a-z0-9]{4}$")
 BLOCK_ID_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
-FEEDBACK_RE = re.compile(r"\bRun agent-[a-z0-9]{4}-[a-z0-9]{4}\.[ \t]*$")
+FEEDBACK_RE = re.compile(r"\bRun aj-run-[a-z0-9]{4}\.[ \t]*$")
 LOGFMT_RE = re.compile(r'([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S*)')
 ALIASES_RE = re.compile(r"^aliases:[ \t]*(.*)$", re.IGNORECASE)
 URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -569,20 +572,14 @@ def parse_note(text: str) -> NoteInfo:
     return info
 
 
-def render_docs(targets: list[Target]) -> str:
-    if targets:
-        listing = "\n".join(
-            f"- [[#{t.name}]]" + (f" (aliases: {', '.join(t.aliases)})" if t.aliases else "") for t in targets
-        )
-    else:
-        listing = "No targets yet. Add one under [[#Targets]]."
-    body = DOCS_TEMPLATE.read_text(encoding="utf-8").replace("{{targets}}", listing).strip("\n")
+def render_docs() -> str:
+    body = DOCS_TEMPLATE.read_text(encoding="utf-8").strip("\n")
     return f"{DOCS_START}\n{body}\n{DOCS_END}"
 
 
 def apply_docs(text: str) -> str:
     info = parse_note(text)
-    block = render_docs(info.targets)
+    block = render_docs()
     raws = text.split("\n")
     if info.docs_span:
         s, e = info.docs_span
@@ -761,8 +758,8 @@ def discover(journal: Journal) -> tuple[list[Found], list[Found], list[Path]]:
 
 def existing_ids(journal: Journal) -> set[str]:
     ids: set[str] = set()
-    for path in rg_files(r"\^agent-[a-z0-9]{4}", journal.folder, fixed=False):
-        ids.update(re.findall(r"\^(agent-[a-z0-9]{4})", read_text(path)))
+    for path in rg_files(r"\^aj-block-[a-z0-9]{4}", journal.folder, fixed=False):
+        ids.update(re.findall(r"\^(aj-block-[a-z0-9]{4})", read_text(path)))
     return ids
 
 
@@ -810,7 +807,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
     setup_logging(machine)
     results = []
     for name in journals_from(machine, args.journal):
-        sweep = "s" + new_token(4)
+        sweep = SWEEP_PREFIX + new_token(4)
         entry: dict = {"journal": name, "sweep": sweep, "ended": False, "requests": []}
         results.append(entry)
         log("sweep-start", sweep=sweep, journal=name)
@@ -848,7 +845,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
             while block is None or (block in ids and block != req.rid):
                 block = ID_PREFIX + new_token(4)
             ids.add(block)
-            run = f"{block}-{new_token(4)}"
+            run = RUN_PREFIX + new_token(4)
             rel = journal.rel(req.path)
             try:
                 claim(journal, req, block)
@@ -884,10 +881,11 @@ def cmd_begin(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    m = RUN_ID_RE.fullmatch(args.run)
-    if not m:
-        raise AJError(f"--run must look like agent-xxxx-xxxx, got {args.run!r}")
-    block = m.group(1)
+    if not RUN_ID_RE.fullmatch(args.run):
+        raise AJError(f"--run must look like aj-run-xxxx, got {args.run!r}")
+    if not BLOCK_ARG_RE.fullmatch(args.block):
+        raise AJError(f"--block must look like aj-block-xxxx, got {args.block!r}")
+    block = args.block
     if args.error is None and (args.link is None or args.summary is None):
         raise AJError("report needs --link and --summary, or --error")
     machine = load_machine()
@@ -997,7 +995,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     else:
         body = (
             f"---\nagentic-journal: {SCHEMA_VERSION}\n---\n# Agentic Journaling\n\n"
-            f"{render_docs([])}\n\n## Targets\n\n"
+            f"{render_docs()}\n\n## Targets\n\n"
         )
         with note.open("x", encoding="utf-8") as fh:
             fh.write(body)
@@ -1033,8 +1031,9 @@ def main() -> int:
 
     p = sub.add_parser("report", help="write one request's result")
     p.add_argument("--journal", required=True)
-    p.add_argument("--sweep", required=True, help="sxxxx, from the begin result")
-    p.add_argument("--run", required=True, help="agent-xxxx-xxxx, from the begin result")
+    p.add_argument("--sweep", required=True, help="aj-sweep-xxxx, from the begin result")
+    p.add_argument("--run", required=True, help="aj-run-xxxx, from the begin result")
+    p.add_argument("--block", required=True, help="aj-block-xxxx, from the begin result")
     p.add_argument("--target", help="matched target name")
     p.add_argument("--link", help="result: vault-relative path or URL")
     p.add_argument("--title", help="link text; default: file name or URL")
