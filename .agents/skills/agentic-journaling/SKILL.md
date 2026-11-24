@@ -99,4 +99,5 @@ ERROR: <one sentence on why it failed>   (ERROR only)
 ## Other commands
 
 - `aj.py check [--journal main]`: read-only. Validates the machine file and config notes, shows the log file, lists targets, shows whether the docs block would be re-rendered, previews each open request with its scope, and lists requests stuck at `[/]`.
+- `aj.py rename "<absolute file path>" "<new name>"`: renames a vault file through the obsidian CLI so links are updated. Precondition: the file is inside the vault root reported by `obsidian vault`. It lists backlinks before and after the rename and exits 1 listing any that were lost. Use it for requests to rename a vault file; never rename with plain file operations.
 - `aj.py init --name main "<journal folder>"`: registers a journal in the machine file and creates `Agentic Journaling.md` with an empty `## Targets` section in that folder.
