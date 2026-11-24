@@ -11,6 +11,7 @@ Commands:
   begin  start sweeps: log sweep-start, render docs, discover and claim requests
   report write one request's result (done or error) back to the journal
   end    log sweep-end, with counts, for sweeps started by begin
+  rename rename a file in the open Obsidian vault and verify its backlinks survive
 """
 
 from __future__ import annotations
@@ -1005,6 +1006,62 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def obsidian(*args: str) -> str:
+    try:
+        proc = subprocess.run(["obsidian", *args], capture_output=True, text=True, encoding="utf-8")
+    except FileNotFoundError:
+        raise AJError("the obsidian CLI is not on PATH")
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or out.startswith("Error:"):
+        raise AJError(f"obsidian {' '.join(args)} failed: {out or proc.stderr.strip()}")
+    return out
+
+
+def backlink_sources(path: str) -> set[str]:
+    out = obsidian("backlinks", f"path={path}", "format=json")
+    if not out or out.startswith("No backlinks"):
+        return set()
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {ln.split("\t")[0] for ln in out.splitlines() if ln.strip()}
+    return {str(e.get("file") or e.get("path")) if isinstance(e, dict) else str(e) for e in data}
+
+
+def cmd_rename(args: argparse.Namespace) -> int:
+    info = {k: v for k, _, v in (ln.partition("\t") for ln in obsidian("vault").splitlines())}
+    if "path" not in info:
+        raise AJError("obsidian vault returned no path")
+    root = Path(info["path"]).resolve()
+    src = Path(args.file).expanduser().resolve()
+    try:
+        rel = src.relative_to(root).as_posix()
+    except ValueError:
+        raise AJError(f"{src} is not inside the open vault {root}")
+    if not src.is_file():
+        raise AJError(f"{src} does not exist")
+    if "/" in args.name or "\\" in args.name:
+        raise AJError("the new name must be a file name, not a path; use move to change folders")
+    new_name = args.name if Path(args.name).suffix else args.name + src.suffix
+    new_rel = (Path(rel).parent / new_name).as_posix()
+    if (root / new_rel).exists():
+        raise AJError(f"{new_rel} already exists")
+    before = backlink_sources(rel)
+    obsidian("rename", f"path={rel}", f"name={new_name}")
+    if not (root / new_rel).is_file():
+        raise AJError(f"rename did not produce {new_rel}")
+    after = backlink_sources(new_rel)
+    # A renamed file that links to itself shows up under its own path.
+    before.discard(rel)
+    after.discard(new_rel)
+    lost = sorted(before - after)
+    print(f"renamed {rel} -> {new_rel}")
+    print(f"backlinks: {len(before)} before, {len(after)} after")
+    for s in lost:
+        print(f"  lost: {s}")
+    return 1 if lost else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="aj.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1038,6 +1095,11 @@ def main() -> int:
     p = sub.add_parser("end", help="log sweep-end with counts")
     p.add_argument("--sweep", required=True, action="append")
     p.set_defaults(fn=cmd_end)
+
+    p = sub.add_parser("rename", help="rename a vault file via the obsidian CLI and verify backlinks")
+    p.add_argument("file", help="path of the file to rename; must be inside the open vault")
+    p.add_argument("name", help="new file name (extension kept if omitted)")
+    p.set_defaults(fn=cmd_rename)
 
     sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy code page.
     args = parser.parse_args()
