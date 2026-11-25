@@ -20,7 +20,7 @@ No running Obsidian app is needed; everything works on the vault files directly.
 
 ## How it works
 
-- **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, request scope, block ids, status, feedback, compare-and-swap file writes and logging.
+- **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, block ids, status, feedback, compare-and-swap file writes and logging.
 - **The agent** does only what needs judgment: it matches each request to a target and follows that target's plain-language instructions in your config note. Each request runs in its own subagent, one at a time, so the harness must provide a subagent tool (omp and Copilot: `task`, Claude: `Agent`).
 - **State lives in the journal.** The checkbox is the status; a block id `^aj-block-xxxx` is the identity. There is no database.
 - **Ids.** One invocation runs one **sweep** per journal (`aj-sweep-3k9q`). Each request processed in it gets its own **run** id (`aj-run-x9k2`); a retry of the same request keeps its block id (`aj-block-7f3a`) and gets a new run id. Log lines about a request carry both.
@@ -112,7 +112,7 @@ Open `Agentic Journaling.md` in Obsidian and add one `### <name>` section per ta
 uv run .agents/skills/agentic-journaling/scripts/aj.py check
 ```
 
-`check` is read-only. It validates both files, shows the log file, lists targets and warns about empty sections or aliases shared by two targets, says whether the docs block would be re-rendered, previews every open request with the content it covers, and lists requests stuck at `[/]`.
+`check` is read-only. It validates both files, shows the log file, lists targets and warns about empty sections or aliases shared by two targets, says whether the docs block would be re-rendered, lists every open request with its file and line, and lists requests stuck at `[/]`.
 
 ## Running it
 
@@ -206,7 +206,7 @@ Copilot automations and Claude scheduled tasks run only while the app is open an
 
 ### Writing a request
 
-A request is a task item tagged `#agent`, written as the **last** item of the content it covers, at the same list level. The instruction names a target or one of its aliases and may say what to do.
+A request is a task item tagged `#agent`, anywhere in a daily note. The instruction names a target or one of its aliases, says what to do and says which content it is about. The agent reads the note and works out that content from the instruction alone; there are no positional rules or keywords. The content can be items in the same note, other notes, or nothing:
 
 ```markdown
 ## Meeting with Dana
@@ -214,30 +214,12 @@ A request is a task item tagged `#agent`, written as the **last** item of the co
 - Sync service retries failed uploads 3 times
     - backoff starts at 2 s, doubles
 - Retries are not logged yet
-- [ ] #agent add to the KB under the sync service concept
-```
-
-The content collected for a request is the items above it at the same level, with their children. Collection stops at the first of: the start of the parent item, a heading, a plain paragraph, an empty line between items at the request's level (empty lines inside an item's children don't count), an earlier `#agent` request at the same level. The parent item and the nearest heading are passed along as context.
-
-The agent decides whether the instruction refers to that content ("add this to the KB", "the process described above") or stands alone. A stand-alone request ignores it, and the collected content may be empty:
-
-```markdown
-Some paragraph.
+- [ ] #agent add the two retry items above to the KB under the sync service concept
 - [ ] #agent create a KB concept on retry backoff strategies
+- [ ] #agent add a KB page summarizing all notes in Projects whose names start with A
 ```
 
-Nested requests work the same way, inside a parent item:
-
-```markdown
-- Project Atlas
-    - export breaks on files with spaces
-    - repro: export "My File.md"
-    - [ ] #agent open an issue in atlas
-    - decided to drop the legacy importer
-    - [ ] #agent add to the KB
-```
-
-Here the first request covers the two items about the export bug; the second covers only "decided to drop the legacy importer", because collection stops at the earlier request. "Project Atlas" is context for both.
+An instruction that leaves the content or the task unclear fails with an error naming what is unclear. The feedback summary names the content the agent used, so a wrong pick shows up in the note.
 
 Ignored: `#agent` in fenced code, in inline code, inside `%% … %%` comments, and anywhere in the config note.
 
@@ -307,7 +289,7 @@ Aliases: atlas issues, atlas tracker
 Issues for Project Atlas live in the GitHub repository `me/atlas`. Use the `gh` CLI; it is logged in already (`gh auth status`). Never use another credential.
 
 - Search open issues first (`gh issue list --repo me/atlas --search ...`). If one covers the same problem, add a comment with the new details instead of opening a new issue.
-- New issue: a short imperative title, the covered content as the body, label `from-journal`.
+- New issue: a short imperative title, the request's content as the body, label `from-journal`.
 - End the body or comment with "Source: journal of <note date>".
 
 Return the issue URL, created or updated, and one sentence on what was filed.
@@ -318,8 +300,8 @@ Aliases: reading list, to read
 
 The reading list is the note `Lists/Reading.md` in this vault, a table with columns Title, Link, Added, Why.
 
-- Add one row per link found in the covered content; skip links already in the table.
-- Added is today's date (YYYY-MM-DD). Why is one short phrase from the covered content.
+- Add one row per link found in the request's content; skip links already in the table.
+- Added is today's date (YYYY-MM-DD). Why is one short phrase from the request's content.
 
 Return `Lists/Reading.md`, updated, and one sentence naming the added titles.
 ````

@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -449,65 +449,6 @@ def children_end(lines: list[Line], idx: int) -> int:
     return end
 
 
-def dedent(raw: str, width: int) -> str:
-    col, i = 0, 0
-    while i < len(raw) and raw[i] in " \t" and col < width:
-        col = (col // 4 + 1) * 4 if raw[i] == "\t" else col + 1
-        i += 1
-    return raw[i:]
-
-
-@dataclass
-class Scope:
-    content: str = ""
-    parent: str | None = None
-    heading: str | None = None
-
-
-def compute_scope(lines: list[Line], r: int) -> Scope:
-    level = lines[r].indent
-    top: int | None = None
-    below = level  # indent of the nearest non-blank line below i
-    i = r - 1
-    while i >= 0:
-        ln = lines[i]
-        if ln.kind == "comment":
-            i -= 1
-            continue
-        if ln.kind == "blank":
-            # A blank line inside an item's children is skipped; one between items at the request's level stops.
-            if below <= level:
-                break
-            i -= 1
-            continue
-        if ln.kind in ("heading", "meta"):
-            break
-        below = ln.indent
-        if ln.indent > level:
-            i -= 1
-            continue
-        if ln.kind == "item" and ln.indent == level:
-            if ln.is_request:
-                break
-            top = i
-            i -= 1
-            continue
-        break
-    scope = Scope()
-    for j in range(r - 1, -1, -1):
-        ln = lines[j]
-        if scope.parent is None and ln.kind == "item" and ln.indent < level:
-            scope.parent = ln.raw.strip()
-        if ln.kind == "heading":
-            scope.heading = ln.raw.strip()
-            break
-    body = [] if top is None else [dedent(ln.raw, level) for ln in lines[top:r]]
-    while body and not body[-1].strip():
-        body.pop()
-    scope.content = "\n".join(body)
-    return scope
-
-
 # ---------------------------------------------------------------- config note
 
 
@@ -725,7 +666,6 @@ class Found:
     status: str
     rid: str | None
     instruction: str
-    scope: Scope
 
 
 def rg_files(pattern: str, folder: Path, fixed: bool = True) -> list[Path]:
@@ -756,7 +696,7 @@ def discover(journal: Journal) -> tuple[list[Found], list[Found], list[Path]]:
         for i, ln in enumerate(lines):
             if not ln.is_request or ln.status not in (OPEN, IN_PROGRESS):
                 continue
-            found = Found(path, i, ln.raw, ln.status, agent_id(ln), instruction_of(ln), compute_scope(lines, i))
+            found = Found(path, i, ln.raw, ln.status, agent_id(ln), instruction_of(ln))
             (open_ if ln.status == OPEN else stuck).append(found)
     return open_, stuck, recent
 
@@ -864,9 +804,6 @@ def cmd_begin(args: argparse.Namespace) -> int:
                 "file": rel,
                 "line": req.idx + 1,
                 "instruction": req.instruction,
-                "heading": req.scope.heading,
-                "parent": req.scope.parent,
-                "content": req.scope.content,
             })
         entry["requests"] = sorted(claimed, key=lambda r: (r["file"], r["line"]))
         if not claimed:
@@ -954,12 +891,6 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"  open requests ({len(open_)}):")
         for f in open_:
             print(f"    {journal.rel(f.path)}:{f.idx + 1} {f.rid or '(new id)'} {f.instruction!r}")
-            if f.scope.heading:
-                print(f"      heading: {f.scope.heading}")
-            if f.scope.parent:
-                print(f"      parent:  {f.scope.parent}")
-            for c in f.scope.content.split("\n") if f.scope.content else ["(nothing above the request)"]:
-                print(f"      | {c}")
         print(f"  stuck in progress [/] ({len(stuck)}):")
         for f in stuck:
             print(f"    {journal.rel(f.path)}:{f.idx + 1} {f.rid or '(no id)'} {f.instruction!r} -> set back to [ ] to retry")
