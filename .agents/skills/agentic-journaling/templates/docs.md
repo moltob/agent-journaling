@@ -1,4 +1,4 @@
-Raise a request with a task item tagged `#agent` in a daily note. Name a target from [[#Targets]] or one of its aliases, say what to do and which content it is about:
+Raise a request with a task item tagged `#agent` in a daily note. Say what to do and which content it is about; name a target from [[#Targets]] or one of its aliases where one fits:
 
 ```markdown
 - Obsidian Journal View shows daily notes as one rolling page

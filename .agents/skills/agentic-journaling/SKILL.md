@@ -1,12 +1,12 @@
 ---
 name: agentic-journaling
-description: Run a propagation over Obsidian journals - find `#agent` task requests in daily notes, carry each out against a target defined in the journal's config note, and write status and result back. Use when asked to run, check or set up agentic journaling.
+description: Run a propagation over Obsidian journals - find `#agent` task requests in daily notes, carry each out (following a target from the journal's config note where one matches), and write status and result back. Use when asked to run, check or set up agentic journaling.
 disable-model-invocation: true
 ---
 
 # Agentic journaling
 
-Scripts do the mechanics: configuration, discovery, ids, status, feedback, compare-and-swap writes and logging. You do only what needs judgment: matching a request to a target and carrying out the target's instructions.
+Scripts do the mechanics: configuration, discovery, ids, status, feedback, compare-and-swap writes and logging. You do only what needs judgment: matching a request to a target where one fits and carrying out the request.
 
 The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <skill-dir>/scripts/aj.py <command>`, each command on one line (your shell may be bash or PowerShell). It writes its log lines to the log file and prints the same lines on stdout; never re-log or summarize them elsewhere.
 
@@ -15,8 +15,8 @@ The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <sk
 - Never edit a request line, its checkbox, its block id or its feedback sub-items. Only `aj.py` writes those.
 - Every request in the `begin` result gets exactly one `report` call, success or error. Then call `end` for every sweep that `begin` left open.
 - Process requests one at a time, each in a fresh subagent, using your harness's subagent tool (omp and Copilot: `task`; Claude: `Agent`). Wait for each to finish before starting the next. Never run two at once.
-- When in doubt, report an error in one sentence. Never guess a target.
-- Never put secrets into any note. Use the env var or CLI login a target section names.
+- When in doubt, report an error in one sentence. Never guess between targets.
+- Never put secrets into any note. Use the env var or CLI login a target section or the instruction names.
 
 ## Propagation
 
@@ -48,7 +48,7 @@ The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <sk
    uv run <skill-dir>/scripts/aj.py report --journal main --sweep aj-sweep-3k9q --run aj-run-x9k2 --block aj-block-7f3a --target kb --error "the KB folder does not exist"
    ```
 
-   The first is a success, the second an error. Report an error also for no or ambiguous target match and for a subagent that failed or returned nothing usable. Omit `--target` when no target matched. `--change` is `created` or `updated`; omit it when neither fits. If `report` exits non-zero, note it and continue with the next request.
+   The first is a success, the second an error. Report an error also for an ambiguous target match and for a subagent that failed or returned nothing usable. Omit `--target` when no target matched. `--change` is `created` or `updated`; omit it when neither fits. If `report` exits non-zero, note it and continue with the next request.
 
 4. After all requests of a journal are reported:
 
@@ -71,14 +71,15 @@ Instruction: <instruction>
 
 1. Read the "## Targets" section of the config note. Each "### <name>" section is a
    target, running to the next ### or ## heading; its "Aliases:" line lists other names.
-2. Match the instruction against the target names and aliases. If no target or more than
-   one target matches, stop and answer ERROR naming why.
+2. Match the instruction against the target names and aliases. If more than one target
+   matches, stop and answer ERROR naming them. If none matches, work without a target.
 3. Read the request's note and find the request by its block id; the line number may be
    stale. Work out from the instruction which content it is about: parts of that note,
    other notes, or none. If the instruction does not say clearly enough which content to
    use or what to do, stop and answer ERROR naming what is unclear.
-4. Follow the matched target's section exactly. Paths in it are relative to the vault root.
-   Use only the credentials it names (env var or CLI login).
+4. With a matched target, follow its section exactly. Without one, follow the instruction.
+   Paths are relative to the vault root. Use only the credentials the target section or
+   the instruction names (env var or CLI login).
 5. Never edit the journal note's request line or the lines under it. Never write block ids
    or block references (^…, #^…) into what you create or update.
 6. Rename or move vault files only with

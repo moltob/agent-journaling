@@ -206,7 +206,7 @@ Copilot automations and Claude scheduled tasks run only while the app is open an
 
 ### Writing a request
 
-A request is a task item tagged `#agent`, anywhere in a daily note. The instruction names a target or one of its aliases, says what to do and says which content it is about. The agent reads the note and works out that content from the instruction alone; there are no positional rules or keywords. The content can be items in the same note, other notes, or nothing:
+A request is a task item tagged `#agent`, anywhere in a daily note. The instruction says what to do and which content it is about, and preferably names a target or one of its aliases. Without a target the agent follows the instruction alone; an instruction matching two targets fails. The agent reads the note and works out the content from the instruction alone; there are no positional rules or keywords. The content can be items in the same note, other notes, or nothing:
 
 ```markdown
 ## Meeting with Dana
