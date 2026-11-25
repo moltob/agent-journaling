@@ -6,13 +6,13 @@ disable-model-invocation: true
 
 # Agentic journaling
 
-Scripts do the mechanics: configuration, discovery, ids, status, feedback, compare-and-swap writes and logging. You do only what needs judgment: matching a request to a target where one fits and carrying out the request.
+Scripts do the mechanics: configuration, discovery, ids, status, the result log, compare-and-swap writes and logging. You do only what needs judgment: matching a request to a target where one fits and carrying out the request.
 
 The script is `scripts/aj.py` in this skill's directory. Run it with `uv run <skill-dir>/scripts/aj.py <command>`, each command on one line (your shell may be bash or PowerShell). It writes its log lines to the log file and prints the same lines on stdout; never re-log or summarize them elsewhere.
 
 ## Hard rules
 
-- Never edit a request line, its checkbox, its block id or its feedback sub-items. Only `aj.py` writes those.
+- Never edit a request line, its checkbox, its block id or the result log note. Only `aj.py` writes those.
 - Every request in the `begin` result gets exactly one `report` call, success or error. Then call `end` for every sweep that `begin` left open.
 - Process requests one at a time, each in a fresh subagent, using your harness's subagent tool (omp and Copilot: `task`; Claude: `Agent`). Wait for each to finish before starting the next. Never run two at once.
 - When in doubt, report an error in one sentence. Never guess between targets.

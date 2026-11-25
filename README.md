@@ -6,21 +6,26 @@ An agent skill that turns `#agent` tasks in your Obsidian daily notes into actio
 - Obsidian Journal View shows daily notes as one rolling page
     - Settings: folder Journal, newest first
 - It reads the Daily Notes folder setting
-- [ ] #agent add this to the KB
+- [ ] #agent add the two Journal View items above to the KB
 ```
 
 becomes, after the next run:
 
 ```markdown
 - [x] #agent add the two Journal View items above to the KB ^aj-block-7f3a
-    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting from the two Journal View items. Run `aj-run-x9k2`.
+```
+
+and the journal's `Agentic Journaling Log.md` gets a row:
+
+```markdown
+| 2026-11-21 14:02 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting from the two Journal View items. |
 ```
 
 No running Obsidian app is needed; everything works on the vault files directly. It runs on Linux, macOS and Windows, under omp, GitHub Copilot or Claude.
 
 ## How it works
 
-- **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, block ids, status, feedback, compare-and-swap file writes and logging.
+- **Scripts** (`.agents/skills/agentic-journaling/scripts/aj.py`, Python with inline dependencies, run by `uv`) do the mechanics: configuration, discovery, block ids, status, the result log, compare-and-swap file writes and logging.
 - **The agent** does only what needs judgment: it matches each request to a target and follows that target's plain-language instructions in your config note. Each request runs in its own subagent, one at a time, so the harness must provide a subagent tool (omp and Copilot: `task`, Claude: `Agent`).
 - **State lives in the journal.** The checkbox is the status; a block id `^aj-block-xxxx` is the identity. There is no database.
 - **Ids.** One invocation runs one **sweep** per journal (`aj-sweep-3k9q`). Each request processed in it gets its own **run** id (`aj-run-x9k2`); a retry of the same request keeps its block id (`aj-block-7f3a`) and gets a new run id. Log lines about a request carry both.
@@ -219,7 +224,7 @@ A request is a task item tagged `#agent`, anywhere in a daily note. The instruct
 - [ ] #agent add a KB page summarizing all notes in Projects whose names start with A
 ```
 
-An instruction that leaves the content or the task unclear fails with an error naming what is unclear. The feedback summary names the content the agent used, so a wrong pick shows up in the note.
+An instruction that leaves the content or the task unclear fails with an error naming what is unclear. The result summary names the content the agent used, so a wrong pick shows up in the log note.
 
 Ignored: `#agent` in fenced code, in inline code, inside `%% … %%` comments, and anywhere in the config note.
 
@@ -233,24 +238,25 @@ Ignored: `#agent` in fenced code, in inline code, inside `%% … %%` comments, a
 | `[!]` | error | no |
 | `[-]` | cancelled | no |
 
-- **Retry:** set `[!]` (or `[x]`) back to `[ ]`. The next run keeps the block id, gets a new run id and replaces its earlier feedback line; your own sub-items stay.
+- **Retry:** set `[!]` (or `[x]`) back to `[ ]`. The next run keeps the block id, gets a new run id and adds a new row to the log note; earlier rows stay.
 - **Cancel:** set `[-]` before the next run.
 - **Interrupted runs:** a request left at `[/]` is never reclaimed. Each sweep logs an `error` line for it and `check` lists it. Set it back to `[ ]` to retry.
 - Files changed in the last 30 s are skipped, so a run never picks up a request you are still typing. They are processed by the next run.
 - Files keep their line endings: a CRLF note stays CRLF.
 
-### Feedback
+### Result log
 
-The run writes one sub-item under the request, in plain sentences, ending with the run id:
+Each result goes into `Agentic Journaling Log.md`, next to the config note, created on the first result. The run inserts one row at the top of its table, so the newest result comes first. The Request column links to the request's block:
 
 ```markdown
-- [x] #agent add the two retry items above to the KB ^aj-block-7f3a
-    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff from the two retry items. Run `aj-run-x9k2`.
-- [x] #agent open an issue in atlas for the export bug above ^aj-block-k2p9
-    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run `aj-run-7hvd`.
-- [!] #agent add the Journal View items above to the wiki ^aj-block-q81m
-    - Failed: "wiki" matches both `kb` and `docs`. Run `aj-run-b05n`.
+| Time | Request | Run | Result |
+| --- | --- | --- | --- |
+| 2026-11-21 14:03 | [[Journal/2026-11-21#^aj-block-q81m\|aj-block-q81m]] | `aj-run-b05n` | Failed: "wiki" matches both `kb` and `docs`. |
+| 2026-11-21 14:02 | [[Journal/2026-11-21#^aj-block-k2p9\|aj-block-k2p9]] | `aj-run-7hvd` | Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. |
+| 2026-11-21 14:01 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff from the two retry items. |
 ```
+
+Rows are never rewritten; a retry adds a new row. Obsidian's backlinks panel of a daily note lists the rows for its requests. You can edit or prune the table; keep its header row.
 
 ## Example config note
 

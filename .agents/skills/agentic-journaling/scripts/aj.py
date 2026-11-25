@@ -47,6 +47,8 @@ VERIFY_DELAY_S = 3.0
 RECENT_S = 30
 SCHEMA_VERSION = 1
 CONFIG_NOTE_NAME = "Agentic Journaling.md"
+LOG_NOTE_NAME = "Agentic Journaling Log.md"
+LOG_TABLE_HEADER = "| Time | Request | Run | Result |\n| --- | --- | --- | --- |"
 DOCS_START = "%% agentic-journal:docs start (maintained by the agent, edits here are replaced) %%"
 DOCS_END = "%% agentic-journal:docs end %%"
 LOG_NAME = "agentic-journal"
@@ -65,7 +67,7 @@ AGENT_ID_RE = re.compile(r"[ \t]+\^(aj-block-[a-z0-9]{4})[ \t]*$")
 RUN_ID_RE = re.compile(r"^aj-run-[a-z0-9]{4}$")
 BLOCK_ARG_RE = re.compile(r"^aj-block-[a-z0-9]{4}$")
 BLOCK_ID_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
-FEEDBACK_RE = re.compile(r"\bRun `?aj-run-[a-z0-9]{4}`?\.[ \t]*$")
+TABLE_SEP_RE = re.compile(r"^\|(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*$")
 LOGFMT_RE = re.compile(r'([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S*)')
 ALIASES_RE = re.compile(r"^aliases:[ \t]*(.*)$", re.IGNORECASE)
 URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -261,10 +263,13 @@ class Journal:
     vault: Path
     folder: Path
     info: NoteInfo
-    indent_unit: str
 
     def rel(self, path: Path) -> str:
         return path.relative_to(self.vault).as_posix()
+
+    @property
+    def log_note(self) -> Path:
+        return self.note.with_name(LOG_NOTE_NAME)
 
 
 def find_vault(start: Path) -> Path | None:
@@ -294,12 +299,7 @@ def load_journal(name: str, note: Path) -> Journal:
         info.warnings.append(f"{settings_file} missing: scanning the whole vault as the Daily Notes folder")
     if info.errors:
         raise AJError(f"{note}: " + "; ".join(info.errors))
-    app = {}
-    app_file = vault / ".obsidian" / "app.json"
-    if app_file.exists():
-        app = json.loads(app_file.read_text(encoding="utf-8")) or {}
-    unit = "\t" if app.get("useTab", True) else " " * int(app.get("tabSize", 4))
-    return Journal(name, note, vault, folder, info, unit)
+    return Journal(name, note, vault, folder, info)
 
 
 # ---------------------------------------------------------------- markdown model
@@ -432,21 +432,6 @@ def instruction_of(line: Line) -> str:
     body = BLOCK_ID_RE.sub("", body)
     body = TAG_RE.sub("", body)
     return " ".join(body.split())
-
-
-def children_end(lines: list[Line], idx: int) -> int:
-    """Index after the last child line of the item at idx (trailing blank lines excluded)."""
-    end, j = idx + 1, idx + 1
-    while j < len(lines):
-        ln = lines[j]
-        if ln.kind == "blank":
-            j += 1
-            continue
-        if ln.kind == "meta" or ln.indent <= lines[idx].indent:
-            break
-        j += 1
-        end = j
-    return end
 
 
 # ---------------------------------------------------------------- config note
@@ -590,37 +575,17 @@ def find_by_id(lines: list[Line], rid: str) -> int | None:
     return hits[0] if hits else None
 
 
-def set_request(text: str, idx: int, status: str, rid: str, feedback: str | None, unit: str) -> str:
-    lines = parse(text)
+def set_request(text: str, idx: int, status: str, rid: str) -> str:
     raws = text.split("\n")
     line = raws[idx]
     line = STATUS_RE.sub(lambda m: f"{m.group(1)}{status}{m.group(2)}", line, count=1)
     if not AGENT_ID_RE.search(line):
         line = line.rstrip() + f" ^{rid}"
     raws[idx] = line
-    if feedback is None:
-        return "\n".join(raws)
-    end = children_end(lines, idx)
-    keep = [
-        raws[j]
-        for j in range(idx + 1, end)
-        if not (lines[j].kind == "item" and FEEDBACK_RE.search(lines[j].masked))
-    ]
-    prefix = line[: len(line) - len(line.lstrip(" \t"))]
-    sub = f"{prefix}{file_unit(lines) or unit}- {feedback}"
-    return "\n".join(raws[: idx + 1] + [sub] + keep + raws[end:])
+    return "\n".join(raws)
 
 
-def file_unit(lines: list[Line]) -> str | None:
-    """Indentation unit used for nested list items in this file, if any."""
-    for ln in lines:
-        if ln.kind == "item" and ln.indent > 0:
-            ws = ln.raw[: len(ln.raw) - len(ln.raw.lstrip(" \t"))]
-            return "\t" if ws.startswith("\t") else " " * len(ws) if len(ws) in (2, 3, 4) else None
-    return None
-
-
-def feedback_ok(run: str, link: str, summary: str, title: str | None, change: str | None) -> str:
+def result_ok(link: str, summary: str, title: str | None, change: str | None) -> str:
     if URL_RE.match(link):
         target = link
         title = title or link
@@ -630,22 +595,51 @@ def feedback_ok(run: str, link: str, summary: str, title: str | None, change: st
     title = title.replace("[", "(").replace("]", ")")
     verb = {"created": "Created", "updated": "Updated"}.get(change or "", "Done")
     summary = " ".join(summary.split()).rstrip(".")
-    return f"{verb} [{title}]({target}): {summary}. Run `{run}`."
+    return f"{verb} [{title}]({target}): {summary}."
 
 
-def feedback_error(run: str, message: str) -> str:
-    return f"Failed: {' '.join(message.split()).rstrip('.')}. Run `{run}`."
+def result_error(message: str) -> str:
+    return f"Failed: {' '.join(message.split()).rstrip('.')}."
 
 
-def finalize(journal: Journal, path: Path, rid: str, status: str, feedback: str) -> None:
+def log_row(journal: Journal, path: Path, rid: str, run: str, result: str) -> str:
+    when = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    note = journal.rel(path).removesuffix(".md")
+    cell = result.replace("|", "\\|")
+    return f"| {when} | [[{note}#^{rid}\\|{rid}]] | `{run}` | {cell} |"
+
+
+def add_log_row(journal: Journal, row: str) -> None:
+    """Insert row at the top of the log note's table, creating the note if needed."""
+    note = journal.log_note
+    try:
+        with note.open("x", encoding="utf-8") as fh:
+            fh.write(f"# Agentic Journaling Log\n\n{LOG_TABLE_HEADER}\n")
+    except FileExistsError:
+        pass
+
     def mutate(text: str) -> str:
-        lines = parse(text)
-        idx = find_by_id(lines, rid)
-        if idx is None:
-            raise Gone(f"^{rid} not found in {journal.rel(path)}")
-        if lines[idx].status != IN_PROGRESS:
-            raise Gone(f"^{rid} is no longer in progress (status [{lines[idx].status}])")
-        return set_request(text, idx, status, rid, feedback, journal.indent_unit)
+        raws = text.split("\n")
+        sep = next((i for i, raw in enumerate(raws) if TABLE_SEP_RE.match(raw.strip())), None)
+        if sep is None:
+            raise AJError(f"{note}: no table found")
+        return "\n".join(raws[: sep + 1] + [row] + raws[sep + 1 :])
+
+    cas_write(note, mutate, lambda text: row in text)
+
+
+def in_progress_idx(journal: Journal, path: Path, lines: list[Line], rid: str) -> int:
+    idx = find_by_id(lines, rid)
+    if idx is None:
+        raise Gone(f"^{rid} not found in {journal.rel(path)}")
+    if lines[idx].status != IN_PROGRESS:
+        raise Gone(f"^{rid} is no longer in progress (status [{lines[idx].status}])")
+    return idx
+
+
+def finalize(journal: Journal, path: Path, rid: str, status: str) -> None:
+    def mutate(text: str) -> str:
+        return set_request(text, in_progress_idx(journal, path, parse(text), rid), status, rid)
 
     def verify(text: str) -> bool:
         lines = parse(text)
@@ -685,7 +679,7 @@ def discover(journal: Journal) -> tuple[list[Found], list[Found], list[Path]]:
     open_, stuck, recent = [], [], []
     now = time.time()
     for path in rg_files(TAG, journal.folder):
-        if path.resolve() == journal.note:
+        if path.resolve() in (journal.note, journal.log_note):
             continue
         lines = parse(read_text(path))
         if not any(ln.is_request and ln.status in (OPEN, IN_PROGRESS) for ln in lines):
@@ -726,7 +720,7 @@ def claim(journal: Journal, req: Found, rid: str) -> None:
                 idx = hits[0]
         if not lines[idx].is_request or lines[idx].status != OPEN:
             raise Gone("request is no longer open")
-        return set_request(text, idx, IN_PROGRESS, rid, None, journal.indent_unit)
+        return set_request(text, idx, IN_PROGRESS, rid)
 
     def verify(text: str) -> bool:
         lines = parse(text)
@@ -784,8 +778,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
             log("error", sweep=sweep, block=s.rid, file=journal.rel(s.path), line=s.idx + 1,
                 message="in progress, not claimed by this sweep")
         claimed = []
-        # Bottom-up per file, so feedback lines inserted below a request never shift the ones above it.
-        for req in sorted(open_, key=lambda f: (str(f.path), -f.idx)):
+        for req in open_:
             block = req.rid
             while block is None or (block in ids and block != req.rid):
                 block = ID_PREFIX + new_token(4)
@@ -829,14 +822,19 @@ def cmd_report(args: argparse.Namespace) -> int:
     ids = {"sweep": args.sweep, "run": args.run, "block": block}
     log("action", **ids, target=args.target, link=args.link, summary=args.summary, error=args.error)
     if args.error is not None:
-        status, text = ERROR, feedback_error(args.run, args.error)
+        status, result = ERROR, result_error(args.error)
     else:
-        status, text = DONE, feedback_ok(args.run, args.link, args.summary, args.title, args.change)
+        status, result = DONE, result_ok(args.link, args.summary, args.title, args.change)
     try:
-        files = [p for p in rg_files(f"^{block}", journal.folder) if p.resolve() != journal.note]
+        skip = (journal.note, journal.log_note)
+        files = [p for p in rg_files(f"^{block}", journal.folder) if p.resolve() not in skip]
         if len(files) != 1:
             raise Gone(f"^{block} found in {len(files)} files under {journal.rel(journal.folder) or '.'}")
-        finalize(journal, files[0], block, status, text)
+        # Fail before logging when the request cannot be finalized; the log row goes first so a failed
+        # log write leaves the request at [/].
+        in_progress_idx(journal, files[0], parse(read_text(files[0])), block)
+        add_log_row(journal, log_row(journal, files[0], block, args.run, result))
+        finalize(journal, files[0], block, status)
     except (AJError, OSError) as exc:
         log("error", **ids, message=str(exc))
         return 1
