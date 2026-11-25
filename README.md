@@ -18,7 +18,7 @@ becomes, after the next run:
 and the journal's `Agentic Journaling Log.md` gets a row:
 
 ```markdown
-| 2026-11-21 14:02 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting from the two Journal View items. |
+| 2026-11-21 14:02 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Updated [[KB/tools/obsidian-journal-view\|Obsidian Journal View]]: added the folder setting from the two Journal View items. |
 ```
 
 No running Obsidian app is needed; everything works on the vault files directly. It runs on Linux, macOS and Windows, under omp, GitHub Copilot or Claude.
@@ -253,10 +253,10 @@ Each result goes into `Agentic Journaling Log.md`, next to the config note, crea
 | --- | --- | --- | --- |
 | 2026-11-21 14:03 | [[Journal/2026-11-21#^aj-block-q81m\|aj-block-q81m]] | `aj-run-b05n` | Failed: "wiki" matches both `kb` and `docs`. |
 | 2026-11-21 14:02 | [[Journal/2026-11-21#^aj-block-k2p9\|aj-block-k2p9]] | `aj-run-7hvd` | Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. |
-| 2026-11-21 14:01 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff from the two retry items. |
+| 2026-11-21 14:01 | [[Journal/2026-11-21#^aj-block-7f3a\|aj-block-7f3a]] | `aj-run-x9k2` | Created [[KB/sync/sync-service-retries\|Sync service retries]]: added retry count and backoff from the two retry items. |
 ```
 
-Rows are never rewritten; a retry adds a new row. Obsidian's backlinks panel of a daily note lists the rows for its requests. You can edit or prune the table; keep its header row.
+Rows are never rewritten; a retry adds a new row. Vault notes in a result show as wiki links, URLs as Markdown links. Obsidian's backlinks panel of a daily note lists the rows for its requests. You can edit or prune the table; keep its header row.
 
 ## Example config note
 

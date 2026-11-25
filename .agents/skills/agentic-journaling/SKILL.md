@@ -95,6 +95,7 @@ LINK: <vault-relative path or URL>       (OK only)
 TITLE: <link text>                       (OK only)
 SUMMARY: <one sentence on what was done, naming the content used> (OK only)
 ERROR: <one sentence on why it failed>   (ERROR only)
-In SUMMARY and ERROR, wrap technical terms (file names, paths, commands, ids, target
-names) in backticks.
+In SUMMARY and ERROR, write vault notes and files as wiki links ([[vault-relative path
+without .md|name]]) and URLs as Markdown links ([text](url)). Wrap other technical terms
+(commands, ids, target names) in backticks.
 ```

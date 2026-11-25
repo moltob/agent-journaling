@@ -587,15 +587,14 @@ def set_request(text: str, idx: int, status: str, rid: str) -> str:
 
 def result_ok(link: str, summary: str, title: str | None, change: str | None) -> str:
     if URL_RE.match(link):
-        target = link
-        title = title or link
+        title = (title or link).replace("[", "(").replace("]", ")")
+        ref = f"[{title}]({link})"
     else:
-        target = link.replace(" ", "%20")
-        title = title or Path(link).stem
-    title = title.replace("[", "(").replace("]", ")")
+        title = (title or Path(link).stem).replace("[", "(").replace("]", ")").replace("|", "-")
+        ref = f"[[{link.removesuffix('.md')}|{title}]]"
     verb = {"created": "Created", "updated": "Updated"}.get(change or "", "Done")
     summary = " ".join(summary.split()).rstrip(".")
-    return f"{verb} [{title}]({target}): {summary}."
+    return f"{verb} {ref}: {summary}."
 
 
 def result_error(message: str) -> str:
