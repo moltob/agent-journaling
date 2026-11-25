@@ -65,7 +65,7 @@ AGENT_ID_RE = re.compile(r"[ \t]+\^(aj-block-[a-z0-9]{4})[ \t]*$")
 RUN_ID_RE = re.compile(r"^aj-run-[a-z0-9]{4}$")
 BLOCK_ARG_RE = re.compile(r"^aj-block-[a-z0-9]{4}$")
 BLOCK_ID_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
-FEEDBACK_RE = re.compile(r"\bRun aj-run-[a-z0-9]{4}\.[ \t]*$")
+FEEDBACK_RE = re.compile(r"\bRun `?aj-run-[a-z0-9]{4}`?\.[ \t]*$")
 LOGFMT_RE = re.compile(r'([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S*)')
 ALIASES_RE = re.compile(r"^aliases:[ \t]*(.*)$", re.IGNORECASE)
 URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -630,11 +630,11 @@ def feedback_ok(run: str, link: str, summary: str, title: str | None, change: st
     title = title.replace("[", "(").replace("]", ")")
     verb = {"created": "Created", "updated": "Updated"}.get(change or "", "Done")
     summary = " ".join(summary.split()).rstrip(".")
-    return f"{verb} [{title}]({target}): {summary}. Run {run}."
+    return f"{verb} [{title}]({target}): {summary}. Run `{run}`."
 
 
 def feedback_error(run: str, message: str) -> str:
-    return f"Failed: {' '.join(message.split()).rstrip('.')}. Run {run}."
+    return f"Failed: {' '.join(message.split()).rstrip('.')}. Run `{run}`."
 
 
 def finalize(journal: Journal, path: Path, rid: str, status: str, feedback: str) -> None:

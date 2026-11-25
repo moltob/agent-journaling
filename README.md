@@ -12,8 +12,8 @@ An agent skill that turns `#agent` tasks in your Obsidian daily notes into actio
 becomes, after the next run:
 
 ```markdown
-- [x] #agent add this to the KB ^aj-block-7f3a
-    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting. Run aj-run-x9k2.
+- [x] #agent add the two Journal View items above to the KB ^aj-block-7f3a
+    - Updated [Obsidian Journal View](KB/tools/obsidian-journal-view.md): added the folder setting from the two Journal View items. Run `aj-run-x9k2`.
 ```
 
 No running Obsidian app is needed; everything works on the vault files directly. It runs on Linux, macOS and Windows, under omp, GitHub Copilot or Claude.
@@ -244,12 +244,12 @@ Ignored: `#agent` in fenced code, in inline code, inside `%% … %%` comments, a
 The run writes one sub-item under the request, in plain sentences, ending with the run id:
 
 ```markdown
-- [x] #agent add this to the KB ^aj-block-7f3a
-    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff. Run aj-run-x9k2.
-- [x] #agent open an issue in atlas ^aj-block-k2p9
-    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run aj-run-7hvd.
-- [!] #agent add this to the wiki ^aj-block-q81m
-    - Failed: "wiki" matches both kb and docs. Run aj-run-b05n.
+- [x] #agent add the two retry items above to the KB ^aj-block-7f3a
+    - Created [Sync service retries](KB/sync/sync-service-retries.md): added retry count and backoff from the two retry items. Run `aj-run-x9k2`.
+- [x] #agent open an issue in atlas for the export bug above ^aj-block-k2p9
+    - Done [atlas#41](https://github.com/me/atlas/issues/41): opened an issue for the export bug. Run `aj-run-7hvd`.
+- [!] #agent add the Journal View items above to the wiki ^aj-block-q81m
+    - Failed: "wiki" matches both `kb` and `docs`. Run `aj-run-b05n`.
 ```
 
 ## Example config note
