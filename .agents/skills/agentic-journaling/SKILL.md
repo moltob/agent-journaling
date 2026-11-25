@@ -1,6 +1,7 @@
 ---
 name: agentic-journaling
 description: Run a propagation over Obsidian journals - find `#agent` task requests in daily notes, carry each out against a target defined in the journal's config note, and write status and result back. Use when asked to run, check or set up agentic journaling.
+disable-model-invocation: true
 ---
 
 # Agentic journaling
@@ -65,6 +66,7 @@ You carry out one agentic-journaling request. Work only on this request.
 
 Vault root: <vault>
 Config note: <config_note>
+Skill dir: <skill-dir>
 Request in: <file>
 Instruction: <instruction>
 Context heading: <heading>
@@ -85,6 +87,10 @@ Content above the request (may be empty):
    Use only the credentials it names (env var or CLI login).
 5. Never edit the journal note's request line or the lines under it. Never write block ids
    or block references (^…, #^…) into what you create or update.
+6. Rename or move vault files only with
+   `uv run <skill-dir>/scripts/aj.py rename "<absolute file path>" "<new name>"`, which
+   updates links through the obsidian CLI. If it exits non-zero, stop and answer ERROR
+   with its message.
 
 Answer with exactly these lines and nothing after them:
 TARGET: <matched target name, or none>
@@ -95,9 +101,3 @@ TITLE: <link text>                       (OK only)
 SUMMARY: <one sentence on what was done> (OK only)
 ERROR: <one sentence on why it failed>   (ERROR only)
 ```
-
-## Other commands
-
-- `aj.py check [--journal main]`: read-only. Validates the machine file and config notes, shows the log file, lists targets, shows whether the docs block would be re-rendered, previews each open request with its scope, and lists requests stuck at `[/]`.
-- `aj.py rename "<absolute file path>" "<new name>"`: renames a vault file through the obsidian CLI so links are updated. Precondition: the file is inside the vault root reported by `obsidian vault`. It lists backlinks before and after the rename and exits 1 listing any that were lost. Use it for requests to rename a vault file; never rename with plain file operations.
-- `aj.py init --name main "<journal folder>"`: registers a journal in the machine file and creates `Agentic Journaling.md` with an empty `## Targets` section in that folder.
